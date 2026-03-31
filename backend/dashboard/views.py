@@ -1,5 +1,6 @@
 import json
 from datetime import timedelta
+from django.db import transaction
 from django.http import JsonResponse
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_http_methods
@@ -19,26 +20,83 @@ def api_create_room(request):
     name = data.get("name")
     capacity = data.get("capacity")
     occupancy = data.get("occupancy", 0)
+    device_payload = data.get("device")
 
     if not name or capacity is None:
         return JsonResponse({"error": "name and capacity are required"}, status=400)
 
     try:
-        room = Room.objects.create(
-            name=str(name),
-            capacity=int(capacity),
-            occupancy=int(occupancy),
-        )
-    except (TypeError, ValueError) as e:
+        cap = int(capacity)
+        occ = int(occupancy)
+        if cap < 1 or occ < 0 or occ > cap:
+            return JsonResponse({"error": "invalid capacity or occupancy"}, status=400)
+    except (TypeError, ValueError):
+        return JsonResponse({"error": "capacity and occupancy must be integers"}, status=400)
+
+    created_device = None
+    try:
+        with transaction.atomic():
+            room = Room.objects.create(
+                name=str(name),
+                capacity=cap,
+                occupancy=occ,
+            )
+
+            if isinstance(device_payload, dict):
+                device_uid = (
+                    str(device_payload.get("deviceId") or device_payload.get("device_uid") or "")
+                ).strip()
+                dev_name = str(device_payload.get("name") or "").strip()
+                dev_type = str(device_payload.get("type") or "").strip()
+                dev_status = device_payload.get("status", "online")
+                if dev_status not in ("online", "offline", "error"):
+                    dev_status = "online"
+
+                if device_uid or dev_name or dev_type:
+                    if not device_uid or not dev_name or not dev_type:
+                        raise ValueError(
+                            "device requires deviceId, name and type when adding a device"
+                        )
+                    created_device = IoTDevice.objects.create(
+                        name=dev_name,
+                        type=dev_type,
+                        device_uid=device_uid,
+                        room=room,
+                        status=dev_status,
+                    )
+    except ValueError as e:
         return JsonResponse({"error": str(e)}, status=400)
 
-    return JsonResponse({
+    out = {
         "id": room.id,
         "name": room.name,
         "capacity": room.capacity,
         "occupancy": room.occupancy,
         "status": room.status,
-    }, status=201)
+    }
+    if created_device is not None:
+        out["device"] = {
+            "id": created_device.id,
+            "name": created_device.name,
+            "type": created_device.type,
+            "deviceId": created_device.device_uid,
+            "roomId": room.id,
+            "status": created_device.status,
+        }
+    return JsonResponse(out, status=201)
+
+
+@csrf_exempt
+@require_http_methods(["DELETE"])
+def api_delete_room(request, room_id):
+    try:
+        room = Room.objects.get(pk=room_id)
+    except Room.DoesNotExist:
+        return JsonResponse({"error": "Room not found"}, status=404)
+
+    room_name = room.name
+    room.delete()
+    return JsonResponse({"ok": True, "message": f"Room '{room_name}' deleted successfully"})
 
 
 @require_http_methods(["GET"])
@@ -202,6 +260,7 @@ def api_devices(request):
                         "id": d.id,
                         "name": d.name,
                         "type": d.type,
+                        "deviceId": d.device_uid,
                         "room": d.room.name,
                         "roomId": d.room_id,
                         "status": d.status,
@@ -220,13 +279,20 @@ def api_devices(request):
     device_type = data.get("type")
     room_id = data.get("roomId")
     status = data.get("status", "online")
+    device_uid = str(data.get("deviceId") or data.get("device_uid") or "").strip()
     if not name or not device_type or not room_id:
         return JsonResponse({"error": "name, type and roomId are required"}, status=400)
     try:
         room = Room.objects.get(pk=int(room_id))
     except (Room.DoesNotExist, ValueError, TypeError):
         return JsonResponse({"error": "Invalid roomId"}, status=400)
-    device = IoTDevice.objects.create(name=name, type=device_type, room=room, status=status)
+    device = IoTDevice.objects.create(
+        name=name,
+        type=device_type,
+        device_uid=device_uid,
+        room=room,
+        status=status,
+    )
     return JsonResponse({"id": device.id}, status=201)
 
 
@@ -250,6 +316,10 @@ def api_device_detail(request, device_id):
     device.name = data.get("name", device.name)
     device.type = data.get("type", device.type)
     device.status = data.get("status", device.status)
+    if "deviceId" in data:
+        device.device_uid = str(data.get("deviceId") or "").strip()
+    elif "device_uid" in data:
+        device.device_uid = str(data.get("device_uid") or "").strip()
     room_id = data.get("roomId")
     if room_id is not None:
         try:

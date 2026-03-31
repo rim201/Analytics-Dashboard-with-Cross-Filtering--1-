@@ -1,23 +1,18 @@
 import { Users, Cpu, Shield, Settings as SettingsIcon, Wifi, Brain, CheckCircle, AlertCircle, Trash2, Edit } from 'lucide-react';
 import React, { useEffect, useState } from 'react';
-
-interface UserRecord {
-  id: number;
-  name: string;
-  email: string;
-  role: 'Admin' | 'Facility Manager' | 'Employee';
-  status: 'active' | 'inactive';
-}
-
-interface DeviceRecord {
-  id: number;
-  name: string;
-  type: string;
-  room: string;
-  roomId?: number;
-  status: 'online' | 'offline' | 'error';
-  lastUpdate: string;
-}
+import {
+  createDevice,
+  createUser,
+  deleteDevice,
+  deleteUser,
+  listDevices,
+  listRooms,
+  listUsers,
+  updateDevice,
+  updateUser,
+  type DeviceRecord,
+  type UserRecord,
+} from '../services/firestoreApi';
 
 interface ToastState {
   type: 'success' | 'error';
@@ -28,7 +23,7 @@ export default function AdminSettings() {
   const [activeTab, setActiveTab] = useState<'users' | 'devices' | 'system' | 'ai'>('users');
   const [users, setUsers] = useState<UserRecord[]>([]);
   const [devices, setDevices] = useState<DeviceRecord[]>([]);
-  const [rooms, setRooms] = useState<{ id: number; name: string }[]>([]);
+  const [rooms, setRooms] = useState<{ id: string; name: string }[]>([]);
   const [userModalOpen, setUserModalOpen] = useState(false);
   const [deviceModalOpen, setDeviceModalOpen] = useState(false);
   const [editingUser, setEditingUser] = useState<UserRecord | null>(null);
@@ -41,38 +36,36 @@ export default function AdminSettings() {
   });
   const [deviceForm, setDeviceForm] = useState({
     name: '',
-    type: 'Room Gateway',
+    deviceId: '',
     roomId: '',
     status: 'online' as DeviceRecord['status'],
   });
   const [toast, setToast] = useState<ToastState | null>(null);
   const [userErrors, setUserErrors] = useState<{ name?: string; email?: string }>({});
-  const [deviceErrors, setDeviceErrors] = useState<{ name?: string; type?: string; roomId?: string }>({});
+  const [deviceErrors, setDeviceErrors] = useState<{ name?: string }>({});
 
   const showToast = (type: ToastState['type'], message: string) => {
     setToast({ type, message });
     setTimeout(() => setToast(null), 3000);
   };
 
-  const fetchUsers = () =>
-    fetch('http://127.0.0.1:8000/api/users/')
-      .then((res) => (res.ok ? res.json() : null))
-      .then((data) => setUsers(data?.users || []))
-      .catch(() => setUsers([]));
-
-  const fetchDevices = () =>
-    fetch('http://127.0.0.1:8000/api/devices/')
-      .then((res) => (res.ok ? res.json() : null))
-      .then((data) => setDevices(data?.devices || []))
-      .catch(() => setDevices([]));
+  const reloadAll = async () => {
+    try {
+      const roomRows = await listRooms();
+      const nameMap = new Map(roomRows.map((r) => [r.id, r.name]));
+      setRooms(roomRows.map((r) => ({ id: r.id, name: r.name })));
+      const [u, d] = await Promise.all([listUsers(), listDevices(nameMap)]);
+      setUsers(u);
+      setDevices(d);
+    } catch {
+      setUsers([]);
+      setDevices([]);
+      setRooms([]);
+    }
+  };
 
   useEffect(() => {
-    fetchUsers();
-    fetchDevices();
-    fetch('http://127.0.0.1:8000/api/rooms/')
-      .then((res) => (res.ok ? res.json() : null))
-      .then((data) => setRooms((data?.rooms || []).map((r: any) => ({ id: r.id, name: r.name }))))
-      .catch(() => setRooms([]));
+    void reloadAll();
   }, []);
 
   const openAddUserModal = () => {
@@ -102,31 +95,27 @@ export default function AdminSettings() {
     else if (!/\S+@\S+\.\S+/.test(userForm.email)) errors.email = 'Invalid email format.';
     setUserErrors(errors);
     if (Object.keys(errors).length > 0) return;
-    const url = editingUser
-      ? `http://127.0.0.1:8000/api/users/${editingUser.id}/`
-      : 'http://127.0.0.1:8000/api/users/';
-    const method = editingUser ? 'PUT' : 'POST';
-    const res = await fetch(url, {
-      method,
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(userForm),
-    });
-    if (res.ok) {
+    try {
+      if (editingUser) {
+        await updateUser(editingUser.id, userForm);
+      } else {
+        await createUser(userForm);
+      }
       setUserModalOpen(false);
-      fetchUsers();
+      await reloadAll();
       showToast('success', editingUser ? 'User updated successfully.' : 'User created successfully.');
-    } else {
+    } catch {
       showToast('error', 'Failed to save user.');
     }
   };
 
-  const deleteUser = async (id: number) => {
+  const deleteUserById = async (id: string) => {
     if (!window.confirm('Delete this user?')) return;
-    const res = await fetch(`http://127.0.0.1:8000/api/users/${id}/`, { method: 'DELETE' });
-    if (res.ok) {
-      fetchUsers();
+    try {
+      await deleteUser(id);
+      await reloadAll();
       showToast('success', 'User deleted successfully.');
-    } else {
+    } catch {
       showToast('error', 'Failed to delete user.');
     }
   };
@@ -135,8 +124,8 @@ export default function AdminSettings() {
     setEditingDevice(null);
     setDeviceForm({
       name: '',
-      type: 'Room Gateway',
-      roomId: rooms[0] ? String(rooms[0].id) : '',
+      deviceId: '',
+      roomId: '',
       status: 'online',
     });
     setDeviceErrors({});
@@ -147,7 +136,7 @@ export default function AdminSettings() {
     setEditingDevice(device);
     setDeviceForm({
       name: device.name,
-      type: device.type,
+      deviceId: device.deviceId || '',
       roomId: String(device.roomId || ''),
       status: device.status,
     });
@@ -157,37 +146,40 @@ export default function AdminSettings() {
 
   const submitDeviceForm = async (e: React.FormEvent) => {
     e.preventDefault();
-    const errors: { name?: string; type?: string; roomId?: string } = {};
+    const errors: { name?: string } = {};
     if (!deviceForm.name.trim()) errors.name = 'Name is required.';
-    if (!deviceForm.type.trim()) errors.type = 'Type is required.';
-    if (!deviceForm.roomId.trim()) errors.roomId = 'Room is required.';
     setDeviceErrors(errors);
     if (Object.keys(errors).length > 0) return;
-    const url = editingDevice
-      ? `http://127.0.0.1:8000/api/devices/${editingDevice.id}/`
-      : 'http://127.0.0.1:8000/api/devices/';
-    const method = editingDevice ? 'PUT' : 'POST';
-    const res = await fetch(url, {
-      method,
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ ...deviceForm, roomId: parseInt(deviceForm.roomId, 10) }),
-    });
-    if (res.ok) {
+    try {
+      if (editingDevice) {
+        await updateDevice(editingDevice.id, {
+          name: deviceForm.name,
+          deviceId: deviceForm.deviceId.trim(),
+          roomId: deviceForm.roomId,
+          status: deviceForm.status,
+        });
+      } else {
+        await createDevice({
+          name: deviceForm.name,
+          deviceId: deviceForm.deviceId.trim(),
+          status: deviceForm.status,
+        });
+      }
       setDeviceModalOpen(false);
-      fetchDevices();
+      await reloadAll();
       showToast('success', editingDevice ? 'Device updated successfully.' : 'Device created successfully.');
-    } else {
+    } catch {
       showToast('error', 'Failed to save device.');
     }
   };
 
-  const deleteDevice = async (id: number) => {
+  const deleteDeviceById = async (id: string) => {
     if (!window.confirm('Delete this device?')) return;
-    const res = await fetch(`http://127.0.0.1:8000/api/devices/${id}/`, { method: 'DELETE' });
-    if (res.ok) {
-      fetchDevices();
+    try {
+      await deleteDevice(id);
+      await reloadAll();
       showToast('success', 'Device deleted successfully.');
-    } else {
+    } catch {
       showToast('error', 'Failed to delete device.');
     }
   };
@@ -335,7 +327,7 @@ export default function AdminSettings() {
                         <button onClick={() => openEditUserModal(user)} className="p-2 text-blue-600 hover:bg-blue-50 rounded-lg transition">
                           <Edit className="w-4 h-4" />
                         </button>
-                        <button onClick={() => deleteUser(user.id)} className="p-2 text-red-600 hover:bg-red-50 rounded-lg transition">
+                        <button onClick={() => deleteUserById(user.id)} className="p-2 text-red-600 hover:bg-red-50 rounded-lg transition">
                           <Trash2 className="w-4 h-4" />
                         </button>
                       </div>
@@ -361,7 +353,7 @@ export default function AdminSettings() {
               <thead className="bg-gray-50">
                 <tr>
                   <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Device</th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Type</th>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Device ID</th>
                   <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Room</th>
                   <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Status</th>
                   <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Last Update</th>
@@ -377,7 +369,9 @@ export default function AdminSettings() {
                         <div className="text-sm font-medium text-gray-900">{device.name}</div>
                       </div>
                     </td>
-                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-600">{device.type}</td>
+                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-600 font-mono text-xs">
+                      {device.deviceId || '—'}
+                    </td>
                     <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-600">{device.room}</td>
                     <td className="px-6 py-4 whitespace-nowrap">
                       <span className={`px-3 py-1 rounded-lg text-xs font-medium border capitalize ${getStatusColor(device.status)}`}>
@@ -390,7 +384,7 @@ export default function AdminSettings() {
                         <button onClick={() => openEditDeviceModal(device)} className="p-2 text-blue-600 hover:bg-blue-50 rounded-lg transition">
                           <Edit className="w-4 h-4" />
                         </button>
-                        <button onClick={() => deleteDevice(device.id)} className="p-2 text-red-600 hover:bg-red-50 rounded-lg transition">
+                        <button onClick={() => deleteDeviceById(device.id)} className="p-2 text-red-600 hover:bg-red-50 rounded-lg transition">
                           <Trash2 className="w-4 h-4" />
                         </button>
                       </div>
@@ -574,21 +568,40 @@ export default function AdminSettings() {
               {deviceErrors.name && <p className="text-xs text-red-600 mt-1">{deviceErrors.name}</p>}
             </div>
             <div>
-              <label className="block text-sm text-gray-600 mb-1">Type</label>
-              <input value={deviceForm.type} onChange={(e) => setDeviceForm((p) => ({ ...p, type: e.target.value }))} className="w-full px-3 py-2 border border-gray-300 rounded-xl outline-none focus:ring-2 focus:ring-emerald-500" required />
-              {deviceErrors.type && <p className="text-xs text-red-600 mt-1">{deviceErrors.type}</p>}
+              <label className="block text-sm text-gray-600 mb-1">Device ID (hardware)</label>
+              <input
+                value={deviceForm.deviceId}
+                onChange={(e) => setDeviceForm((p) => ({ ...p, deviceId: e.target.value }))}
+                placeholder="Optional external ID"
+                className="w-full px-3 py-2 border border-gray-300 rounded-xl outline-none focus:ring-2 focus:ring-emerald-500 font-mono text-sm"
+              />
             </div>
-            <div className="grid grid-cols-2 gap-3">
-              <div>
-                <label className="block text-sm text-gray-600 mb-1">Room</label>
-                <select value={deviceForm.roomId} onChange={(e) => setDeviceForm((p) => ({ ...p, roomId: e.target.value }))} className="w-full px-3 py-2 border border-gray-300 rounded-xl outline-none focus:ring-2 focus:ring-emerald-500" required>
-                  <option value="" disabled>Select room</option>
-                  {rooms.map((room) => (
-                    <option key={room.id} value={room.id}>{room.name}</option>
-                  ))}
-                </select>
-                {deviceErrors.roomId && <p className="text-xs text-red-600 mt-1">{deviceErrors.roomId}</p>}
+            {!editingDevice && (
+              <p className="text-xs text-gray-500">
+                La salle apparaîtra dans le tableau une fois l’appareil associé depuis la création d’une salle (Rooms).
+              </p>
+            )}
+            {editingDevice ? (
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-sm text-gray-600 mb-1">Room</label>
+                  <select value={deviceForm.roomId} onChange={(e) => setDeviceForm((p) => ({ ...p, roomId: e.target.value }))} className="w-full px-3 py-2 border border-gray-300 rounded-xl outline-none focus:ring-2 focus:ring-emerald-500">
+                    <option value="">— Non assigné —</option>
+                    {rooms.map((room) => (
+                      <option key={room.id} value={room.id}>{room.name}</option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-sm text-gray-600 mb-1">Status</label>
+                  <select value={deviceForm.status} onChange={(e) => setDeviceForm((p) => ({ ...p, status: e.target.value as DeviceRecord['status'] }))} className="w-full px-3 py-2 border border-gray-300 rounded-xl outline-none focus:ring-2 focus:ring-emerald-500">
+                    <option value="online">online</option>
+                    <option value="offline">offline</option>
+                    <option value="error">error</option>
+                  </select>
+                </div>
               </div>
+            ) : (
               <div>
                 <label className="block text-sm text-gray-600 mb-1">Status</label>
                 <select value={deviceForm.status} onChange={(e) => setDeviceForm((p) => ({ ...p, status: e.target.value as DeviceRecord['status'] }))} className="w-full px-3 py-2 border border-gray-300 rounded-xl outline-none focus:ring-2 focus:ring-emerald-500">
@@ -597,7 +610,7 @@ export default function AdminSettings() {
                   <option value="error">error</option>
                 </select>
               </div>
-            </div>
+            )}
             <div className="flex justify-end gap-2 pt-2">
               <button type="button" onClick={() => setDeviceModalOpen(false)} className="px-4 py-2 border border-gray-300 rounded-xl text-gray-700 hover:bg-gray-50">Cancel</button>
               <button type="submit" className="px-4 py-2 bg-emerald-500 text-white rounded-xl hover:bg-emerald-600">{editingDevice ? 'Save' : 'Create'}</button>

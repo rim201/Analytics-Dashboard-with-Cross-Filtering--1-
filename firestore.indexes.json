@@ -1,0 +1,10 @@
+{
+  "indexes": [
+    {
+      "collectionGroup": "measurements",
+      "queryScope": "COLLECTION_GROUP",
+      "fields": [{ "fieldPath": "timestamp", "order": "DESCENDING" }]
+    }
+  ],
+  "fieldOverrides": []
+}

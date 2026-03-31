@@ -2,8 +2,7 @@ import React, { useState, useEffect, useMemo } from 'react';
 import { ArrowLeft, Users, Thermometer, Wind, Volume2, Sun, Droplets, Brain, Plus } from 'lucide-react';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
 import '../styles/custom.css';
-
-const API_BASE = 'http://127.0.0.1:8000';
+import { getRoomById, listMeasurements } from '../services/firestoreApi';
 
 interface RoomDetailsProps {
   roomId: string | null;
@@ -21,11 +20,12 @@ interface Measurement {
 }
 
 interface RoomInfo {
-  id: number;
+  id: string;
   name: string;
   capacity: number;
   occupancy: number;
   status: 'available' | 'busy';
+  comfortScore?: number;
 }
 
 // Fallback mock data when API returns empty or fails
@@ -51,14 +51,8 @@ export default function RoomDetails({ roomId, onBack, onAddRoom }: RoomDetailsPr
     }
     setLoading(true);
     setError(null);
-    fetch(`${API_BASE}/api/rooms/${numericRoomId}/measurements/`)
-      .then((res) => {
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        return res.json();
-      })
-      .then((data: { measurements: Measurement[] }) => {
-        setMeasurements(data.measurements ?? []);
-      })
+    listMeasurements(numericRoomId)
+      .then((rows) => setMeasurements(rows))
       .catch((err) => {
         setError(err.message || 'Failed to load measurements');
         setMeasurements([]);
@@ -71,11 +65,20 @@ export default function RoomDetails({ roomId, onBack, onAddRoom }: RoomDetailsPr
       setRoomInfo(null);
       return;
     }
-    fetch(`${API_BASE}/api/rooms/`)
-      .then((res) => (res.ok ? res.json() : null))
-      .then((data) => {
-        const selected = (data?.rooms || []).find((r: any) => String(r.id) === String(numericRoomId));
-        setRoomInfo(selected || null);
+    getRoomById(numericRoomId)
+      .then((r) => {
+        if (!r) {
+          setRoomInfo(null);
+          return;
+        }
+        setRoomInfo({
+          id: r.id,
+          name: r.name,
+          capacity: r.capacity,
+          occupancy: r.occupancy,
+          status: r.status,
+          comfortScore: r.comfortScore,
+        });
       })
       .catch(() => setRoomInfo(null));
   }, [numericRoomId]);
@@ -110,7 +113,7 @@ export default function RoomDetails({ roomId, onBack, onAddRoom }: RoomDetailsPr
     status: roomInfo?.status === 'busy' ? 'occupied' : 'available',
     occupancy: roomInfo?.occupancy ?? 0,
     capacity: roomInfo?.capacity ?? 0,
-    comfortScore: 92,
+    comfortScore: roomInfo?.comfortScore ?? 92,
     temperature: latest?.temperature ?? 22.5,
     humidity: latest?.humidity ?? 45,
     co2: latest?.co2 ?? 580,
@@ -217,7 +220,7 @@ export default function RoomDetails({ roomId, onBack, onAddRoom }: RoomDetailsPr
         <div className="flex-shrink-0 flex items-center gap-2">
           <button
             onClick={() => (onAddRoom ? onAddRoom() : console.log('Add room clicked'))}
-            className="inline-flex items-center gap-2 px-3 py-2 rounded-lg bg-emerald-600 text-white text-sm hover:bg-emerald-700 transition"
+            className="inline-flex items-center gap-2 px-3 py-2 rounded-lg bg-emerald-500 text-white text-sm shadow-sm hover:bg-emerald-600 transition"
           >
             <Plus className="w-4 h-4" />
             Add Room

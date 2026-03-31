@@ -1,9 +1,9 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import LoginPage from './components/LoginPage';
+import { seedFirestoreIfEmpty } from './services/firestoreApi';
 import MainDashboard from './components/MainDashboard';
 import RoomsManagement from './components/RoomsManagement';
 import RoomDetails from './components/RoomDetails';
-import EnergyAnalytics from './components/EnergyAnalytics';
 import AlertsNotifications from './components/AlertsNotifications';
 import AdminSettings from './components/AdminSettings';
 import Sidebar from './components/Sidebar';
@@ -13,9 +13,8 @@ export type PageType =
   | 'login' 
   | 'dashboard' 
   | 'rooms' 
-  | 'room-details' 
-  | 'energy' 
-  | 'alerts' 
+  | 'room-details'
+  | 'alerts'
   | 'settings';
 
 function App() {
@@ -37,6 +36,11 @@ function App() {
     setCurrentPage('room-details');
   };
 
+  useEffect(() => {
+    if (!isAuthenticated) return;
+    void seedFirestoreIfEmpty();
+  }, [isAuthenticated]);
+
   if (!isAuthenticated) {
     return <LoginPage onLogin={handleLogin} />;
   }
@@ -50,7 +54,6 @@ function App() {
           {currentPage === 'dashboard' && <MainDashboard onNavigate={handleNavigate} />}
           {currentPage === 'rooms' && <RoomsManagement onRoomSelect={handleRoomSelect} />}
           {currentPage === 'room-details' && <RoomDetails roomId={selectedRoomId} onBack={() => setCurrentPage('rooms')} />}
-          {currentPage === 'energy' && <EnergyAnalytics />}
           {currentPage === 'alerts' && <AlertsNotifications />}
           {currentPage === 'settings' && <AdminSettings />}
         </main>

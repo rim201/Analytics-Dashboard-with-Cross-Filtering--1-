@@ -1,41 +1,94 @@
-import { Search, Filter, Users, Star, Thermometer, Wind, Volume2, Sun, Plus } from 'lucide-react';
-import React, { useEffect, useState } from 'react';
+import { Search, Filter, Users, Thermometer, Wind, Volume2, Sun, Plus, Trash2 } from 'lucide-react';
+import React, { useEffect, useRef, useState } from 'react';
+import {
+  createRoom,
+  deleteRoom,
+  listDevices,
+  listRooms,
+  type DeviceRecord,
+  type RoomRow,
+} from '../services/firestoreApi';
 
 interface RoomsManagementProps {
   onRoomSelect: (roomId: string) => void;
 }
 
-const API_BASE = 'http://127.0.0.1:8000';
-
-interface RoomRow {
-  id: number;
-  name: string;
-  capacity: number;
-  occupancy: number;
-  status: 'available' | 'busy';
-  comfortScore: number;
-  temperature: number;
-  co2: number;
-  noise: number;
-  light: number;
-}
+const defaultAddForm = () => ({
+  name: '',
+  capacity: '',
+  occupancy: '0',
+  linkedDeviceId: '',
+});
 
 export default function RoomsManagement({ onRoomSelect }: RoomsManagementProps) {
   const [rooms, setRooms] = useState<RoomRow[]>([]);
   const [searchQuery, setSearchQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState<'all' | 'available' | 'busy'>('all');
   const [roomActionMessage, setRoomActionMessage] = useState<string>('');
+  const [showAddRoomForm, setShowAddRoomForm] = useState(false);
+  const [addForm, setAddForm] = useState(defaultAddForm);
+  const [addFormErrors, setAddFormErrors] = useState<Record<string, string>>({});
+  const [addRoomSubmitting, setAddRoomSubmitting] = useState(false);
+  const [iotDevicesPicker, setIotDevicesPicker] = useState<DeviceRecord[]>([]);
+  const [iotPickerLoaded, setIotPickerLoaded] = useState(false);
+  const addFormRef = useRef<HTMLDivElement>(null);
 
   const fetchRooms = async () => {
-    const res = await fetch(`${API_BASE}/api/rooms/`);
-    if (!res.ok) return;
-    const data = await res.json();
-    setRooms(data.rooms || []);
+    try {
+      const data = await listRooms();
+      setRooms(data);
+    } catch {
+      setRooms([]);
+    }
   };
 
   useEffect(() => {
     fetchRooms();
   }, []);
+
+  useEffect(() => {
+    if (!showAddRoomForm) return;
+    addFormRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }, [showAddRoomForm]);
+
+  useEffect(() => {
+    if (!showAddRoomForm) {
+      setIotPickerLoaded(false);
+      return;
+    }
+    setIotPickerLoaded(false);
+    let cancelled = false;
+    (async () => {
+      try {
+        const roomRows = await listRooms();
+        const nameMap = new Map(roomRows.map((r) => [r.id, r.name]));
+        const devs = await listDevices(nameMap);
+        if (!cancelled) {
+          setIotDevicesPicker([...devs].sort((a, b) => a.name.localeCompare(b.name, 'fr')));
+        }
+      } catch {
+        if (!cancelled) setIotDevicesPicker([]);
+      } finally {
+        if (!cancelled) setIotPickerLoaded(true);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [showAddRoomForm]);
+
+  useEffect(() => {
+    if (!showAddRoomForm) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && !addRoomSubmitting) {
+        setShowAddRoomForm(false);
+        setAddForm(defaultAddForm());
+        setAddFormErrors({});
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [showAddRoomForm, addRoomSubmitting]);
 
   const filteredRooms = rooms.filter((room) => {
     const matchesSearch = room.name.toLowerCase().includes(searchQuery.toLowerCase());
@@ -55,27 +108,74 @@ export default function RoomsManagement({ onRoomSelect }: RoomsManagementProps) 
       : 'bg-emerald-500';
   };
 
-  const handleAddRoom = async () => {
-    const name = window.prompt('Room name?');
-    if (!name) return;
-    const capInput = window.prompt('Capacity?');
-    if (!capInput) return;
-    const occInput = window.prompt('Current occupancy? (0 = available)', '0');
-    const capacity = parseInt(capInput, 10);
-    const occupancy = parseInt(occInput || '0', 10);
-    if (Number.isNaN(capacity) || Number.isNaN(occupancy)) return;
+  const validateAddForm = () => {
+    const err: Record<string, string> = {};
+    const name = addForm.name.trim();
+    if (!name) err.name = 'Nom requis.';
 
-    const res = await fetch(`${API_BASE}/api/rooms/create/`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name, capacity, occupancy }),
-    });
-    if (res.ok) {
-      fetchRooms();
-      setRoomActionMessage('Room added successfully.');
-    } else {
-      const err = await res.text();
-      setRoomActionMessage(`Add room failed: ${err || res.status}`);
+    const capacity = parseInt(addForm.capacity, 10);
+    if (Number.isNaN(capacity) || capacity < 1) {
+      err.capacity = 'Capacité ≥ 1 requise.';
+    }
+
+    const occupancy = parseInt(addForm.occupancy, 10);
+    if (Number.isNaN(occupancy) || occupancy < 0) {
+      err.occupancy = 'Nombre entier ≥ 0.';
+    } else if (!Number.isNaN(capacity) && occupancy > capacity) {
+      err.occupancy = "Ne peut pas dépasser la capacité.";
+    }
+
+    setAddFormErrors(err);
+    return Object.keys(err).length === 0;
+  };
+
+  const handleSubmitAddRoom = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!validateAddForm()) return;
+
+    const capacity = parseInt(addForm.capacity, 10);
+    const occupancy = parseInt(addForm.occupancy, 10);
+    const linkedId = addForm.linkedDeviceId.trim();
+
+    setAddRoomSubmitting(true);
+    try {
+      await createRoom({
+        name: addForm.name.trim(),
+        capacity,
+        occupancy,
+        existingDeviceId: linkedId || undefined,
+      });
+      await fetchRooms();
+      const linked = linkedId ? iotDevicesPicker.find((d) => d.id === linkedId) : undefined;
+      setRoomActionMessage(
+        linked
+          ? `Salle créée. L’appareil « ${linked.name} » est maintenant associé à cette salle.`
+          : 'Salle ajoutée.',
+      );
+      setShowAddRoomForm(false);
+      setAddForm(defaultAddForm());
+      setAddFormErrors({});
+    } catch (error) {
+      setRoomActionMessage(`Échec : ${error}`);
+    } finally {
+      setAddRoomSubmitting(false);
+    }
+  };
+
+  const handleDeleteRoom = async (room: RoomRow) => {
+    const ok = window.confirm(
+      `Supprimer la salle « ${room.name} » ?\n\nCette action est irréversible. Cliquez sur OK pour supprimer, ou Annuler pour ne rien faire.`,
+    );
+    if (!ok) {
+      return;
+    }
+
+    try {
+      await deleteRoom(String(room.id));
+      await fetchRooms();
+      setRoomActionMessage(`La salle « ${room.name} » a été supprimée.`);
+    } catch (error) {
+      setRoomActionMessage(`Échec de la suppression : ${error}`);
     }
   };
 
@@ -91,14 +191,158 @@ export default function RoomsManagement({ onRoomSelect }: RoomsManagementProps) 
           <span className="text-sm text-gray-600">{filteredRooms.length} rooms</span>
           <button
             type="button"
-            onClick={handleAddRoom}
-            className="inline-flex items-center px-4 py-2 rounded-xl bg-emerald-500 text-white text-sm font-medium shadow-sm hover:bg-emerald-600 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-emerald-500"
+            onClick={() => {
+              if (showAddRoomForm) {
+                setShowAddRoomForm(false);
+                setAddForm(defaultAddForm());
+                setAddFormErrors({});
+              } else {
+                setAddForm(defaultAddForm());
+                setAddFormErrors({});
+                setShowAddRoomForm(true);
+              }
+            }}
+            className={`inline-flex items-center px-4 py-2 rounded-xl text-white text-sm font-medium shadow-sm focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-emerald-500 ${
+              showAddRoomForm ? 'bg-gray-600 hover:bg-gray-700' : 'bg-emerald-500 hover:bg-emerald-600'
+            }`}
           >
             <Plus className="w-4 h-4 mr-2" />
-            Add Room
+            {showAddRoomForm ? 'Fermer' : 'Add Room'}
           </button>
         </div>
       </div>
+
+      {showAddRoomForm && (
+        <div
+          ref={addFormRef}
+          className="bg-white rounded-2xl shadow-lg border-2 border-emerald-200"
+          role="region"
+          aria-labelledby="add-room-title"
+        >
+          <div className="flex items-center justify-between border-b border-gray-100 px-6 py-4 rounded-t-2xl bg-emerald-50">
+            <h3 id="add-room-title" className="text-lg font-semibold text-gray-900">
+              Nouvelle salle
+            </h3>
+            <button
+              type="button"
+              disabled={addRoomSubmitting}
+              onClick={() => {
+                setShowAddRoomForm(false);
+                setAddForm(defaultAddForm());
+                setAddFormErrors({});
+              }}
+              className="text-gray-500 hover:text-gray-700 text-xl leading-none px-2 disabled:opacity-50"
+              aria-label="Fermer le formulaire"
+            >
+              ×
+            </button>
+          </div>
+
+          <form onSubmit={handleSubmitAddRoom} className="px-6 py-4 space-y-4">
+            <div>
+              <label htmlFor="room-name" className="block text-sm font-medium text-gray-700 mb-1">
+                Nom de la salle <span className="text-red-500">*</span>
+              </label>
+              <input
+                id="room-name"
+                type="text"
+                autoComplete="off"
+                value={addForm.name}
+                onChange={(e) => setAddForm((f) => ({ ...f, name: e.target.value }))}
+                className="w-full px-3 py-2 border border-gray-300 rounded-xl focus:ring-2 focus:ring-emerald-500 outline-none"
+              />
+              {addFormErrors.name && <p className="mt-1 text-sm text-red-600">{addFormErrors.name}</p>}
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <div>
+                <label htmlFor="room-capacity" className="block text-sm font-medium text-gray-700 mb-1">
+                  Capacité (places) <span className="text-red-500">*</span>
+                </label>
+                <input
+                  id="room-capacity"
+                  type="number"
+                  min={1}
+                  value={addForm.capacity}
+                  onChange={(e) => setAddForm((f) => ({ ...f, capacity: e.target.value }))}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-xl focus:ring-2 focus:ring-emerald-500 outline-none"
+                />
+                {addFormErrors.capacity && (
+                  <p className="mt-1 text-sm text-red-600">{addFormErrors.capacity}</p>
+                )}
+              </div>
+              <div>
+                <label htmlFor="room-occupancy" className="block text-sm font-medium text-gray-700 mb-1">
+                  Occupation actuelle
+                </label>
+                <input
+                  id="room-occupancy"
+                  type="number"
+                  min={0}
+                  value={addForm.occupancy}
+                  onChange={(e) => setAddForm((f) => ({ ...f, occupancy: e.target.value }))}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-xl focus:ring-2 focus:ring-emerald-500 outline-none"
+                />
+                {addFormErrors.occupancy && (
+                  <p className="mt-1 text-sm text-red-600">{addFormErrors.occupancy}</p>
+                )}
+              </div>
+            </div>
+
+            <div className="pt-2 border-t border-gray-100">
+              <label htmlFor="room-linked-device" className="block text-sm font-medium text-gray-900 mb-1">
+                Appareil IoT (optionnel)
+              </label>
+              <p className="text-xs text-gray-500 mb-2">
+                Choisissez un appareil déjà enregistré (Admin → IoT Devices). Il sera rattaché à cette nouvelle salle
+                (remplace l’association précédente).
+              </p>
+              <select
+                id="room-linked-device"
+                value={addForm.linkedDeviceId}
+                onChange={(e) => setAddForm((f) => ({ ...f, linkedDeviceId: e.target.value }))}
+                className="w-full px-3 py-2 border border-gray-300 rounded-xl focus:ring-2 focus:ring-emerald-500 outline-none bg-white"
+              >
+                <option value="">— Aucun appareil —</option>
+                {iotDevicesPicker.map((d) => (
+                  <option key={d.id} value={d.id}>
+                    {d.name}
+                    {d.deviceId ? ` · ${d.deviceId}` : ''} · Salle actuelle : {d.room}
+                  </option>
+                ))}
+              </select>
+              {iotPickerLoaded && iotDevicesPicker.length === 0 && (
+                <p className="mt-2 text-xs text-amber-700">
+                  Aucun appareil dans Firestore. Ajoutez-en dans Paramètres → IoT Devices Management.
+                </p>
+              )}
+            </div>
+
+            <div className="flex flex-col-reverse sm:flex-row gap-2 sm:justify-end pt-4 border-t border-gray-100">
+              <button
+                type="button"
+                disabled={addRoomSubmitting}
+                onClick={() => {
+                  setShowAddRoomForm(false);
+                  setAddForm(defaultAddForm());
+                  setAddFormErrors({});
+                }}
+                className="px-4 py-2 rounded-xl border border-gray-300 text-gray-700 font-medium hover:bg-gray-50 disabled:opacity-50"
+              >
+                Annuler
+              </button>
+              <button
+                type="submit"
+                disabled={addRoomSubmitting}
+                className="px-4 py-2 rounded-xl bg-emerald-500 text-white font-medium shadow-sm hover:bg-emerald-600 disabled:opacity-50"
+              >
+                {addRoomSubmitting ? 'Enregistrement…' : 'Créer la salle'}
+              </button>
+            </div>
+          </form>
+        </div>
+      )}
+
       {roomActionMessage && (
         <div className="text-sm px-3 py-2 rounded-lg border border-gray-200 bg-white text-gray-700">
           {roomActionMessage}
@@ -213,11 +457,35 @@ export default function RoomsManagement({ onRoomSelect }: RoomsManagementProps) 
               </div>
             </div>
 
-            {/* Action Button */}
-            <div className="p-4 bg-gray-50 border-t border-gray-100">
-              <button className="w-full px-4 py-2 bg-emerald-500 text-white rounded-xl font-medium hover:bg-emerald-600 transition">
+            {/* Action Buttons */}
+            <div className="p-4 bg-gray-50 border-t border-gray-100 flex gap-2">
+              <button className="flex-1 px-4 py-2 bg-emerald-500 text-white rounded-xl font-medium hover:bg-emerald-600 transition">
                 View Details
               </button>
+              {room.occupancy > 0 ? (
+                <button
+                  type="button"
+                  disabled
+                  title="Impossible de supprimer une salle occupée. Réduire l’occupation à 0 d’abord."
+                  onClick={(e) => e.stopPropagation()}
+                  className="px-4 py-2 bg-gray-100 text-gray-400 border border-gray-200 rounded-xl font-medium cursor-not-allowed flex items-center gap-2"
+                  aria-label="Delete disabled: room is occupied"
+                >
+                  <Trash2 className="w-4 h-4" />
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    void handleDeleteRoom(room);
+                  }}
+                  className="px-4 py-2 bg-red-50 text-red-600 border border-red-200 rounded-xl font-medium hover:bg-red-100 transition flex items-center gap-2"
+                  aria-label={`Delete room ${room.name}`}
+                >
+                  <Trash2 className="w-4 h-4" />
+                </button>
+              )}
             </div>
           </div>
         ))}

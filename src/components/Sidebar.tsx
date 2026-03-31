@@ -1,4 +1,4 @@
-import { LayoutDashboard, DoorOpen, Radio, BarChart3, Bell, Settings, Zap } from 'lucide-react';
+import { LayoutDashboard, DoorOpen, Radio, Bell, Settings, Zap } from 'lucide-react';
 import { PageType } from '../App';
 
 interface SidebarProps {
@@ -10,7 +10,6 @@ const navItems = [
   { id: 'dashboard' as PageType, label: 'Dashboard', icon: LayoutDashboard },
   { id: 'rooms' as PageType, label: 'Rooms', icon: DoorOpen },
   { id: 'room-details' as PageType, label: 'Live Monitoring', icon: Radio },
-  { id: 'energy' as PageType, label: 'Energy Analytics', icon: BarChart3 },
   { id: 'alerts' as PageType, label: 'Alerts', icon: Bell },
   { id: 'settings' as PageType, label: 'Settings', icon: Settings },
 ];

@@ -2,6 +2,7 @@ import { Thermometer, Wind, Volume2, Sun, Star, TrendingUp, TrendingDown, Brain 
 import { LineChart, Line, AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
 import React, { useEffect, useState } from 'react';
 import { PageType } from '../App';
+import { fetchDashboardSummary } from '../services/firestoreApi';
 
 interface MainDashboardProps {
   onNavigate: (page: PageType) => void;
@@ -38,21 +39,21 @@ export default function MainDashboard({ onNavigate }: MainDashboardProps) {
   });
 
   useEffect(() => {
-    fetch('http://127.0.0.1:8000/api/dashboard-summary/')
-      .then((res) => (res.ok ? res.json() : null))
+    fetchDashboardSummary()
       .then((data) => {
-        if (data) {
-          setSummary({
-            comfortScore: data.comfortScore || 92,
-            temperature: data.temperature || 22.5,
-            co2: data.co2 || 580,
-            noise: data.noise || 42,
-            light: data.light || 450,
-            temperatureData: (data.temperatureData && data.temperatureData.length > 0) ? data.temperatureData : fallbackTemperatureData,
-            co2Data: (data.co2Data && data.co2Data.length > 0) ? data.co2Data : fallbackCo2Data,
-            roomOverview: data.roomOverview || { total: 0, available: 0, occupied: 0, maintenance: 0 },
-          });
-        }
+        setSummary({
+          comfortScore: data.comfortScore || 92,
+          temperature: data.temperature || 22.5,
+          co2: data.co2 || 580,
+          noise: data.noise || 42,
+          light: data.light || 450,
+          temperatureData:
+            data.temperatureData && data.temperatureData.length > 0
+              ? data.temperatureData
+              : fallbackTemperatureData,
+          co2Data: data.co2Data && data.co2Data.length > 0 ? data.co2Data : fallbackCo2Data,
+          roomOverview: data.roomOverview || { total: 0, available: 0, occupied: 0, maintenance: 0 },
+        });
       })
       .catch(() => undefined);
   }, []);

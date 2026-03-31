@@ -53,6 +53,12 @@ class IoTDevice(models.Model):
 
     name = models.CharField(max_length=120)
     type = models.CharField(max_length=64)
+    device_uid = models.CharField(
+        max_length=128,
+        blank=True,
+        default="",
+        help_text="Identifiant matériel / externe de l'appareil",
+    )
     room = models.ForeignKey(Room, on_delete=models.CASCADE, related_name="devices")
     status = models.CharField(max_length=16, choices=STATUS_CHOICES, default="online")
     last_update = models.DateTimeField(auto_now=True)

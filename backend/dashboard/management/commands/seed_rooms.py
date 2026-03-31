@@ -78,6 +78,7 @@ class Command(BaseCommand):
                     room=room,
                     defaults={
                         "type": dev_type,
+                        "device_uid": f"IOT-R{room.id}-D{dev_idx + 1}",
                         "status": "online" if room.occupancy > 0 else "offline",
                     },
                 )
