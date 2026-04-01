@@ -11,6 +11,7 @@ import {
 
 interface RoomsManagementProps {
   onRoomSelect: (roomId: string) => void;
+  isAdmin?: boolean;
 }
 
 const defaultAddForm = () => ({
@@ -20,7 +21,7 @@ const defaultAddForm = () => ({
   linkedDeviceId: '',
 });
 
-export default function RoomsManagement({ onRoomSelect }: RoomsManagementProps) {
+export default function RoomsManagement({ onRoomSelect, isAdmin = false }: RoomsManagementProps) {
   const [rooms, setRooms] = useState<RoomRow[]>([]);
   const [searchQuery, setSearchQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState<'all' | 'available' | 'busy'>('all');
@@ -45,6 +46,13 @@ export default function RoomsManagement({ onRoomSelect }: RoomsManagementProps) 
   useEffect(() => {
     fetchRooms();
   }, []);
+
+  useEffect(() => {
+    if (isAdmin || !showAddRoomForm) return;
+    setShowAddRoomForm(false);
+    setAddForm(defaultAddForm());
+    setAddFormErrors({});
+  }, [isAdmin, showAddRoomForm]);
 
   useEffect(() => {
     if (!showAddRoomForm) return;
@@ -131,6 +139,7 @@ export default function RoomsManagement({ onRoomSelect }: RoomsManagementProps) 
 
   const handleSubmitAddRoom = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!isAdmin) return;
     if (!validateAddForm()) return;
 
     const capacity = parseInt(addForm.capacity, 10);
@@ -189,30 +198,32 @@ export default function RoomsManagement({ onRoomSelect }: RoomsManagementProps) 
         </div>
         <div className="flex items-center space-x-3">
           <span className="text-sm text-gray-600">{filteredRooms.length} rooms</span>
-          <button
-            type="button"
-            onClick={() => {
-              if (showAddRoomForm) {
-                setShowAddRoomForm(false);
-                setAddForm(defaultAddForm());
-                setAddFormErrors({});
-              } else {
-                setAddForm(defaultAddForm());
-                setAddFormErrors({});
-                setShowAddRoomForm(true);
-              }
-            }}
-            className={`inline-flex items-center px-4 py-2 rounded-xl text-white text-sm font-medium shadow-sm focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-emerald-500 ${
-              showAddRoomForm ? 'bg-gray-600 hover:bg-gray-700' : 'bg-emerald-500 hover:bg-emerald-600'
-            }`}
-          >
-            <Plus className="w-4 h-4 mr-2" />
-            {showAddRoomForm ? 'Fermer' : 'Add Room'}
-          </button>
+          {isAdmin && (
+            <button
+              type="button"
+              onClick={() => {
+                if (showAddRoomForm) {
+                  setShowAddRoomForm(false);
+                  setAddForm(defaultAddForm());
+                  setAddFormErrors({});
+                } else {
+                  setAddForm(defaultAddForm());
+                  setAddFormErrors({});
+                  setShowAddRoomForm(true);
+                }
+              }}
+              className={`inline-flex items-center px-4 py-2 rounded-xl text-white text-sm font-medium shadow-sm focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-emerald-500 ${
+                showAddRoomForm ? 'bg-gray-600 hover:bg-gray-700' : 'bg-emerald-500 hover:bg-emerald-600'
+              }`}
+            >
+              <Plus className="w-4 h-4 mr-2" />
+              {showAddRoomForm ? 'Fermer' : 'Add Room'}
+            </button>
+          )}
         </div>
       </div>
 
-      {showAddRoomForm && (
+      {isAdmin && showAddRoomForm && (
         <div
           ref={addFormRef}
           className="bg-white rounded-2xl shadow-lg border-2 border-emerald-200"
@@ -462,30 +473,31 @@ export default function RoomsManagement({ onRoomSelect }: RoomsManagementProps) 
               <button className="flex-1 px-4 py-2 bg-emerald-500 text-white rounded-xl font-medium hover:bg-emerald-600 transition">
                 View Details
               </button>
-              {room.occupancy > 0 ? (
-                <button
-                  type="button"
-                  disabled
-                  title="Impossible de supprimer une salle occupée. Réduire l’occupation à 0 d’abord."
-                  onClick={(e) => e.stopPropagation()}
-                  className="px-4 py-2 bg-gray-100 text-gray-400 border border-gray-200 rounded-xl font-medium cursor-not-allowed flex items-center gap-2"
-                  aria-label="Delete disabled: room is occupied"
-                >
-                  <Trash2 className="w-4 h-4" />
-                </button>
-              ) : (
-                <button
-                  type="button"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    void handleDeleteRoom(room);
-                  }}
-                  className="px-4 py-2 bg-red-50 text-red-600 border border-red-200 rounded-xl font-medium hover:bg-red-100 transition flex items-center gap-2"
-                  aria-label={`Delete room ${room.name}`}
-                >
-                  <Trash2 className="w-4 h-4" />
-                </button>
-              )}
+              {isAdmin &&
+                (room.occupancy > 0 ? (
+                  <button
+                    type="button"
+                    disabled
+                    title="Impossible de supprimer une salle occupée. Réduire l’occupation à 0 d’abord."
+                    onClick={(e) => e.stopPropagation()}
+                    className="px-4 py-2 bg-gray-100 text-gray-400 border border-gray-200 rounded-xl font-medium cursor-not-allowed flex items-center gap-2"
+                    aria-label="Delete disabled: room is occupied"
+                  >
+                    <Trash2 className="w-4 h-4" />
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      void handleDeleteRoom(room);
+                    }}
+                    className="px-4 py-2 bg-red-50 text-red-600 border border-red-200 rounded-xl font-medium hover:bg-red-100 transition flex items-center gap-2"
+                    aria-label={`Delete room ${room.name}`}
+                  >
+                    <Trash2 className="w-4 h-4" />
+                  </button>
+                ))}
             </div>
           </div>
         ))}

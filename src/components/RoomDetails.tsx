@@ -1,12 +1,19 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { ArrowLeft, Users, Thermometer, Wind, Volume2, Sun, Droplets, Brain, Plus } from 'lucide-react';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
 import '../styles/custom.css';
-import { getRoomById, listMeasurements } from '../services/firestoreApi';
+import { getRoomById, listMeasurements, updateRoomLight } from '../services/firestoreApi';
+
+const LUX_MIN = 150;
+const LUX_MAX = 1000;
+const LUX_STEP = 10;
 
 interface RoomDetailsProps {
   roomId: string | null;
   onBack: () => void;
+  /** Si false, le bouton « Add Room » n’est pas affiché. */
+  isAdmin?: boolean;
+  /** Appelé quand un admin clique sur « Add Room » (ex. aller à la liste des salles). */
   onAddRoom?: () => void;
 }
 
@@ -26,6 +33,8 @@ interface RoomInfo {
   occupancy: number;
   status: 'available' | 'busy';
   comfortScore?: number;
+  /** Lux issus du document Firestore `rooms` (modifiable par l’admin). */
+  light: number;
 }
 
 // Fallback mock data when API returns empty or fails
@@ -35,13 +44,21 @@ const fallbackChartPoint = (base: number, variance: number) =>
     value: base + (Math.random() - 0.5) * variance,
   }));
 
-export default function RoomDetails({ roomId, onBack, onAddRoom }: RoomDetailsProps) {
+export default function RoomDetails({ roomId, onBack, isAdmin = false, onAddRoom }: RoomDetailsProps) {
   const [measurements, setMeasurements] = useState<Measurement[]>([]);
   const [roomInfo, setRoomInfo] = useState<RoomInfo | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [dragLightLux, setDragLightLux] = useState<number | null>(null);
+  const [lightSaving, setLightSaving] = useState(false);
+  const [lightError, setLightError] = useState<string | null>(null);
 
   const numericRoomId = roomId?.replace(/^room-/, '') ?? '';
+
+  useEffect(() => {
+    setDragLightLux(null);
+    setLightError(null);
+  }, [numericRoomId]);
 
   useEffect(() => {
     if (!numericRoomId) {
@@ -78,6 +95,7 @@ export default function RoomDetails({ roomId, onBack, onAddRoom }: RoomDetailsPr
           occupancy: r.occupancy,
           status: r.status,
           comfortScore: r.comfortScore,
+          light: r.light,
         });
       })
       .catch(() => setRoomInfo(null));
@@ -118,8 +136,40 @@ export default function RoomDetails({ roomId, onBack, onAddRoom }: RoomDetailsPr
     humidity: latest?.humidity ?? 45,
     co2: latest?.co2 ?? 580,
     noise: latest?.noise ?? 42,
-    light: latest?.light ?? 450,
+    light: roomInfo?.light ?? latest?.light ?? 450,
   };
+
+  const clampLux = useCallback((v: number) => Math.min(LUX_MAX, Math.max(LUX_MIN, Math.round(v))), []);
+
+  const commitLightFromSlider = useCallback(
+    async (el: HTMLInputElement) => {
+      if (!numericRoomId || !isAdmin) return;
+      const v = Number(el.value);
+      setDragLightLux(null);
+      setLightError(null);
+      setLightSaving(true);
+      try {
+        await updateRoomLight(numericRoomId, v);
+        const r = await getRoomById(numericRoomId);
+        if (r) {
+          setRoomInfo({
+            id: r.id,
+            name: r.name,
+            capacity: r.capacity,
+            occupancy: r.occupancy,
+            status: r.status,
+            comfortScore: r.comfortScore,
+            light: r.light,
+          });
+        }
+      } catch {
+        setLightError('Enregistrement impossible. Réessayez.');
+      } finally {
+        setLightSaving(false);
+      }
+    },
+    [numericRoomId, isAdmin],
+  );
 
   const aiInsights = useMemo(() => {
     const messages: { title: string; text: string; tone: 'blue' | 'purple' | 'green' }[] = [];
@@ -217,15 +267,18 @@ export default function RoomDetails({ roomId, onBack, onAddRoom }: RoomDetailsPr
             </div>
           </div>
         </div>
-        <div className="flex-shrink-0 flex items-center gap-2">
-          <button
-            onClick={() => (onAddRoom ? onAddRoom() : console.log('Add room clicked'))}
-            className="inline-flex items-center gap-2 px-3 py-2 rounded-lg bg-emerald-500 text-white text-sm shadow-sm hover:bg-emerald-600 transition"
-          >
-            <Plus className="w-4 h-4" />
-            Add Room
-          </button>
-        </div>
+        {isAdmin ? (
+          <div className="flex-shrink-0 flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => onAddRoom?.()}
+              className="inline-flex items-center gap-2 px-3 py-2 rounded-lg bg-emerald-500 text-white text-sm shadow-sm hover:bg-emerald-600 transition"
+            >
+              <Plus className="w-4 h-4" />
+              Add Room
+            </button>
+          </div>
+        ) : null}
       </div>
 
       {/* AI Status Banner */}
@@ -296,12 +349,44 @@ export default function RoomDetails({ roomId, onBack, onAddRoom }: RoomDetailsPr
         <div className="bg-white rounded-2xl p-6 shadow-lg border border-gray-100">
           <div className="flex items-center justify-between mb-4">
             <div className="w-12 h-12 bg-gradient-to-br from-amber-100 to-amber-200 rounded-xl flex items-center justify-center">
-              <Sun className="w-6 h-6 text-amber-600" />
+              <Sun className="w-6 h-6 text-amber-600" aria-hidden />
             </div>
             <span className="px-2 py-1 bg-emerald-50 text-emerald-600 text-xs font-medium rounded-lg">Optimal</span>
           </div>
-          <div className="text-3xl font-bold text-gray-900 mb-1">{room.light}</div>
+          <div className="text-3xl font-bold text-gray-900 mb-1 tabular-nums">{Math.round(room.light)}</div>
           <div className="text-sm text-gray-500">Light (lux)</div>
+          {isAdmin && numericRoomId ? (
+            <div className="mt-4 pt-4 border-t border-gray-100">
+              <label htmlFor="room-light-lux" className="block text-xs font-medium text-gray-500 mb-2">
+                Cible {LUX_MIN}–{LUX_MAX} lux (cette salle)
+              </label>
+              <input
+                id="room-light-lux"
+                type="range"
+                min={LUX_MIN}
+                max={LUX_MAX}
+                step={LUX_STEP}
+                value={
+                  dragLightLux !== null ? dragLightLux : clampLux(room.light)
+                }
+                disabled={lightSaving}
+                onChange={(e) => setDragLightLux(Number(e.target.value))}
+                onPointerUp={(e) => void commitLightFromSlider(e.currentTarget)}
+                onPointerCancel={() => setDragLightLux(null)}
+                onBlur={(e) => void commitLightFromSlider(e.currentTarget)}
+                className="mt-1 h-2 w-full cursor-pointer accent-amber-600 disabled:opacity-50"
+              />
+              <div className="mt-1 flex justify-between text-[10px] text-gray-400">
+                <span>{LUX_MIN}</span>
+                <span>{LUX_MAX}</span>
+              </div>
+              {lightError && (
+                <p className="mt-2 text-xs text-red-600" role="alert">
+                  {lightError}
+                </p>
+              )}
+            </div>
+          ) : null}
         </div>
       </div>
 

@@ -3,9 +3,11 @@ import {
   collection,
   collectionGroup,
   deleteDoc,
+  deleteField,
   doc,
   getDocs,
   limit,
+  onSnapshot,
   orderBy,
   query,
   Timestamp,
@@ -16,6 +18,7 @@ import {
   type DocumentSnapshot,
 } from 'firebase/firestore';
 import { db } from '../firebase';
+import type { AppRole } from './auth';
 
 // —— Types (alignés avec l’ancienne API Django) —— //
 
@@ -45,9 +48,15 @@ export type UserRecord = {
   id: string;
   name: string;
   email: string;
-  role: 'Admin' | 'Facility Manager' | 'Employee';
+  role: AppRole;
   status: 'active' | 'inactive';
+  mustChangePassword?: boolean;
 };
+
+function mapUserRole(r: unknown): AppRole {
+  if (r === 'admin' || r === 'user' || r === 'technicien') return r;
+  return 'user';
+}
 
 export type DeviceRecord = {
   id: string;
@@ -69,6 +78,363 @@ export type DashboardSummary = {
   co2Data: { time: string; value: number }[];
   roomOverview: { total: number; available: number; occupied: number; maintenance: number };
 };
+
+// —— Alerts (Firestore) —— //
+
+export type AlertStatus = 'open' | 'pending' | 'resolved';
+
+export type AlertRow = {
+  id: string;
+  type: 'critical' | 'warning' | 'info' | 'success';
+  room: string;
+  title: string;
+  message: string;
+  timestamp: string;
+  category: string;
+  status: AlertStatus;
+  resolutionRequestedBy?: string;
+  resolutionRequestedAt?: string;
+  /** UID Firebase de l’utilisateur ayant demandé la résolution (notifications). */
+  resolutionRequestedByUid?: string;
+  resolvedByName?: string;
+  resolvedAt?: string;
+};
+
+function mapAlertType(t: unknown): AlertRow['type'] {
+  if (t === 'critical' || t === 'warning' || t === 'info' || t === 'success') return t;
+  return 'info';
+}
+
+function mapAlertStatus(s: unknown): AlertStatus {
+  if (s === 'open' || s === 'pending' || s === 'resolved') return s;
+  return 'open';
+}
+
+function formatRelativeAlertTime(createdAtMs: number): string {
+  const diff = Date.now() - createdAtMs;
+  const minutes = Math.floor(diff / 60000);
+  if (minutes < 1) return "À l'instant";
+  if (minutes < 60) return `Il y a ${minutes} min`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `Il y a ${hours} h`;
+  const days = Math.floor(hours / 24);
+  return `Il y a ${days} j`;
+}
+
+function firestoreTimeToIso(v: unknown): string | undefined {
+  if (v instanceof Timestamp) return v.toDate().toISOString();
+  if (typeof v === 'string') return v;
+  return undefined;
+}
+
+function mapAlertDoc(d: DocumentSnapshot): AlertRow {
+  const x = d.data() ?? {};
+  let createdAtMs = Date.now();
+  if (x.createdAt instanceof Timestamp) {
+    createdAtMs = x.createdAt.toMillis();
+  }
+  return {
+    id: d.id,
+    type: mapAlertType(x.type),
+    room: String(x.room ?? ''),
+    title: String(x.title ?? ''),
+    message: String(x.message ?? ''),
+    category: String(x.category ?? ''),
+    status: mapAlertStatus(x.status),
+    timestamp: formatRelativeAlertTime(createdAtMs),
+    resolutionRequestedBy: x.resolutionRequestedBy ? String(x.resolutionRequestedBy) : undefined,
+    resolutionRequestedAt: firestoreTimeToIso(x.resolutionRequestedAt),
+    resolutionRequestedByUid: x.resolutionRequestedByUid ? String(x.resolutionRequestedByUid) : undefined,
+    resolvedByName: x.resolvedByName ? String(x.resolvedByName) : undefined,
+    resolvedAt: firestoreTimeToIso(x.resolvedAt),
+  };
+}
+
+export function subscribeAlerts(
+  onData: (alerts: AlertRow[]) => void,
+  onError?: (e: Error) => void,
+): () => void {
+  const q = query(collection(db, 'alerts'), orderBy('createdAt', 'desc'));
+  return onSnapshot(
+    q,
+    (snap) => onData(snap.docs.map(mapAlertDoc)),
+    (err) => onError?.(err as Error),
+  );
+}
+
+export async function alertRequestResolution(
+  alertId: string,
+  userName: string,
+  userUid: string,
+): Promise<void> {
+  await updateDoc(doc(db, 'alerts', alertId), {
+    status: 'pending',
+    resolutionRequestedBy: userName.trim(),
+    resolutionRequestedByUid: userUid.trim(),
+    resolutionRequestedAt: Timestamp.now(),
+    updatedAt: Timestamp.now(),
+  });
+}
+
+export async function alertMarkDirectResolved(alertId: string, adminName: string): Promise<void> {
+  await updateDoc(doc(db, 'alerts', alertId), {
+    status: 'resolved',
+    resolvedByName: adminName.trim(),
+    resolvedAt: Timestamp.now(),
+    resolutionRequestedBy: deleteField(),
+    resolutionRequestedAt: deleteField(),
+    resolutionRequestedByUid: deleteField(),
+    updatedAt: Timestamp.now(),
+  });
+}
+
+export async function alertApproveResolution(alertId: string, adminName: string): Promise<void> {
+  const ref = doc(db, 'alerts', alertId);
+  const snap = await getDoc(ref);
+  const x = snap.data() ?? {};
+  const targetUid = String(x.resolutionRequestedByUid ?? '').trim();
+  const title = String(x.title ?? 'Alerte');
+
+  await updateDoc(ref, {
+    status: 'resolved',
+    resolvedByName: adminName.trim(),
+    resolvedAt: Timestamp.now(),
+    updatedAt: Timestamp.now(),
+  });
+
+  if (targetUid) {
+    await addDoc(collection(db, 'inAppNotifications'), {
+      userId: targetUid,
+      kind: 'alert_resolution_accepted',
+      alertId,
+      alertTitle: title,
+      read: false,
+      createdAt: Timestamp.now(),
+    });
+  }
+}
+
+/** Refus admin : alerte repasse en ouvert + notification à l’utilisateur ayant demandé. */
+export async function alertRejectResolution(alertId: string): Promise<void> {
+  const ref = doc(db, 'alerts', alertId);
+  const snap = await getDoc(ref);
+  const x = snap.data() ?? {};
+  const targetUid = String(x.resolutionRequestedByUid ?? '').trim();
+  const title = String(x.title ?? 'Alerte');
+
+  await updateDoc(ref, {
+    status: 'open',
+    resolutionRequestedBy: deleteField(),
+    resolutionRequestedAt: deleteField(),
+    resolutionRequestedByUid: deleteField(),
+    updatedAt: Timestamp.now(),
+  });
+
+  if (targetUid) {
+    await addDoc(collection(db, 'inAppNotifications'), {
+      userId: targetUid,
+      kind: 'alert_resolution_rejected',
+      alertId,
+      alertTitle: title,
+      read: false,
+      createdAt: Timestamp.now(),
+    });
+  }
+}
+
+// —— Notifications in-app (cloche) —— //
+
+export type InAppNotificationKind = 'alert_resolution_accepted' | 'alert_resolution_rejected';
+
+export type InAppNotificationRow = {
+  id: string;
+  userId: string;
+  kind: InAppNotificationKind;
+  alertId: string;
+  alertTitle: string;
+  read: boolean;
+  createdAt: string;
+};
+
+function mapInAppNotificationDoc(d: DocumentSnapshot): InAppNotificationRow {
+  const x = d.data() ?? {};
+  const kind = x.kind === 'alert_resolution_rejected' ? 'alert_resolution_rejected' : 'alert_resolution_accepted';
+  return {
+    id: d.id,
+    userId: String(x.userId ?? ''),
+    kind,
+    alertId: String(x.alertId ?? ''),
+    alertTitle: String(x.alertTitle ?? ''),
+    read: x.read === true,
+    createdAt:
+      x.createdAt instanceof Timestamp ? x.createdAt.toDate().toISOString() : new Date().toISOString(),
+  };
+}
+
+export function subscribeInAppNotificationsForUser(
+  userId: string,
+  onData: (items: InAppNotificationRow[]) => void,
+  onError?: (e: Error) => void,
+): () => void {
+  const q = query(
+    collection(db, 'inAppNotifications'),
+    where('userId', '==', userId),
+    orderBy('createdAt', 'desc'),
+    limit(40),
+  );
+  return onSnapshot(
+    q,
+    (snap) => onData(snap.docs.map(mapInAppNotificationDoc)),
+    (err) => onError?.(err as Error),
+  );
+}
+
+export async function markInAppNotificationRead(notificationId: string): Promise<void> {
+  await updateDoc(doc(db, 'inAppNotifications', notificationId), {
+    read: true,
+    updatedAt: Timestamp.now(),
+  });
+}
+
+export async function markInAppNotificationsReadMany(notificationIds: string[]): Promise<void> {
+  const ids = [...new Set(notificationIds)].filter(Boolean);
+  if (ids.length === 0) return;
+  const now = Timestamp.now();
+  const batchSize = 400;
+  for (let i = 0; i < ids.length; i += batchSize) {
+    const chunk = ids.slice(i, i + batchSize);
+    const batch = writeBatch(db);
+    for (const id of chunk) {
+      batch.update(doc(db, 'inAppNotifications', id), { read: true, updatedAt: now });
+    }
+    await batch.commit();
+  }
+}
+
+export async function seedAlertsIfEmpty(): Promise<boolean> {
+  const snap = await getDocs(query(collection(db, 'alerts'), limit(1)));
+  if (!snap.empty) return false;
+
+  const now = Date.now();
+  const batch = writeBatch(db);
+
+  const seeds: Array<{
+    id: string;
+    data: Record<string, unknown>;
+  }> = [
+    {
+      id: 'alert_1',
+      data: {
+        type: 'critical',
+        room: 'Project War Room',
+        title: 'High CO₂ Level Detected',
+        message:
+          'CO₂ concentration has exceeded 800 ppm. Immediate ventilation increase recommended.',
+        category: 'Air Quality',
+        status: 'open',
+        createdAt: Timestamp.fromMillis(now - 2 * 60000),
+      },
+    },
+    {
+      id: 'alert_2',
+      data: {
+        type: 'warning',
+        room: 'Conference Room A',
+        title: 'Temperature Above Setpoint',
+        message: 'Current temperature is 2°C above the comfort setpoint. HVAC system adjusting.',
+        category: 'Temperature',
+        status: 'open',
+        createdAt: Timestamp.fromMillis(now - 15 * 60000),
+      },
+    },
+    {
+      id: 'alert_3',
+      data: {
+        type: 'warning',
+        room: 'Executive Suite',
+        title: 'Occupancy Sensor Malfunction',
+        message: 'Occupancy sensor not responding. Manual verification required.',
+        category: 'System',
+        status: 'open',
+        createdAt: Timestamp.fromMillis(now - 32 * 60000),
+      },
+    },
+    {
+      id: 'alert_4',
+      data: {
+        type: 'info',
+        room: 'Training Room',
+        title: 'Scheduled Maintenance Reminder',
+        message: 'HVAC filter replacement scheduled for tomorrow at 8:00 AM.',
+        category: 'Maintenance',
+        status: 'open',
+        createdAt: Timestamp.fromMillis(now - 60 * 60000),
+      },
+    },
+    {
+      id: 'alert_5',
+      data: {
+        type: 'success',
+        room: 'Meeting Room B',
+        title: 'Optimization Complete',
+        message: 'AI has successfully optimized temperature and lighting for current occupancy.',
+        category: 'Optimization',
+        status: 'resolved',
+        createdAt: Timestamp.fromMillis(now - 60 * 60000),
+        resolvedByName: 'Facility Admin',
+        resolvedAt: Timestamp.fromMillis(now - 60 * 60000),
+      },
+    },
+    {
+      id: 'alert_6',
+      data: {
+        type: 'warning',
+        room: 'Focus Room 1',
+        title: 'Humidity Level High',
+        message: 'Humidity at 62%. Dehumidification system activated.',
+        category: 'Air Quality',
+        status: 'open',
+        createdAt: Timestamp.fromMillis(now - 120 * 60000),
+      },
+    },
+    {
+      id: 'alert_7',
+      data: {
+        type: 'info',
+        room: 'Brainstorm Hub',
+        title: 'Energy Savings Achieved',
+        message: 'Room achieved 15% energy savings today through smart scheduling.',
+        category: 'Energy',
+        status: 'resolved',
+        createdAt: Timestamp.fromMillis(now - 180 * 60000),
+        resolvedByName: 'Superviseur',
+        resolvedAt: Timestamp.fromMillis(now - 180 * 60000),
+      },
+    },
+    {
+      id: 'alert_8',
+      data: {
+        type: 'critical',
+        room: 'Training Room',
+        title: 'HVAC System Error',
+        message: 'HVAC controller communication lost. Technician notified.',
+        category: 'System',
+        status: 'resolved',
+        createdAt: Timestamp.fromMillis(now - 240 * 60000),
+        resolutionRequestedBy: 'Jean Dupont',
+        resolutionRequestedAt: Timestamp.fromMillis(now - 250 * 60000),
+        resolvedByName: 'Technicien terrain',
+        resolvedAt: Timestamp.fromMillis(now - 240 * 60000),
+      },
+    },
+  ];
+
+  for (const { id, data } of seeds) {
+    batch.set(doc(db, 'alerts', id), { ...data, updatedAt: Timestamp.now() });
+  }
+  await batch.commit();
+  return true;
+}
 
 function mapRoomDoc(d: DocumentSnapshot): RoomRow {
   const x = d.data() ?? {};
@@ -98,6 +464,15 @@ function formatLastUpdate(ts: Timestamp | undefined): string {
 export async function listRooms(): Promise<RoomRow[]> {
   const snap = await getDocs(query(collection(db, 'rooms'), orderBy('name')));
   return snap.docs.map(mapRoomDoc);
+}
+
+/** Réglage cible d’éclairage (lux) pour une salle — réservé à l’UI admin. */
+export async function updateRoomLight(roomId: string, lightLux: number): Promise<void> {
+  const clamped = Math.max(150, Math.min(1000, Math.round(Number(lightLux))));
+  await updateDoc(doc(db, 'rooms', roomId), {
+    light: clamped,
+    updatedAt: Timestamp.now(),
+  });
 }
 
 export async function createRoom(payload: {
@@ -274,37 +649,36 @@ export async function fetchDashboardSummary(): Promise<DashboardSummary> {
 // —— Users —— //
 
 export async function listUsers(): Promise<UserRecord[]> {
-  const snap = await getDocs(query(collection(db, 'users'), orderBy('name')));
+  const snap = await getDocs(query(collection(db, 'userProfiles'), orderBy('name')));
   return snap.docs.map((d) => {
     const x = d.data();
     return {
       id: d.id,
       name: String(x.name ?? ''),
       email: String(x.email ?? ''),
-      role: (x.role as UserRecord['role']) || 'Employee',
-      status: (x.status as UserRecord['status']) || 'active',
+      role: mapUserRole(x.role),
+      status: (x.status === 'inactive' ? 'inactive' : 'active') as UserRecord['status'],
+      mustChangePassword: x.mustChangePassword === true,
     };
   });
 }
 
-export async function createUser(data: {
-  name: string;
-  email: string;
-  role: string;
-  status: string;
-}): Promise<void> {
-  await addDoc(collection(db, 'users'), data);
-}
-
 export async function updateUser(
   userId: string,
-  data: { name: string; email: string; role: string; status: string },
+  data: { name: string; email: string; role: AppRole; status: 'active' | 'inactive' },
 ): Promise<void> {
-  await updateDoc(doc(db, 'users', userId), data);
+  await updateDoc(doc(db, 'userProfiles', userId), {
+    name: data.name,
+    email: data.email,
+    role: data.role,
+    status: data.status,
+    updatedAt: Timestamp.now(),
+  });
 }
 
+/** Supprime uniquement le document Firestore (pas le compte Firebase Authentication). */
 export async function deleteUser(userId: string): Promise<void> {
-  await deleteDoc(doc(db, 'users', userId));
+  await deleteDoc(doc(db, 'userProfiles', userId));
 }
 
 // —— Devices —— //
@@ -405,19 +779,6 @@ export async function seedFirestoreIfEmpty(): Promise<boolean> {
       lastUpdate: Timestamp.now(),
     });
   }
-
-  await addDoc(collection(db, 'users'), {
-    name: 'Admin Demo',
-    email: 'admin@example.com',
-    role: 'Admin',
-    status: 'active',
-  });
-  await addDoc(collection(db, 'users'), {
-    name: 'Facility Manager',
-    email: 'facility@example.com',
-    role: 'Facility Manager',
-    status: 'active',
-  });
 
   return true;
 }

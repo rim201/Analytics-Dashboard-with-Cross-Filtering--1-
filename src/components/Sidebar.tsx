@@ -1,20 +1,22 @@
-import { LayoutDashboard, DoorOpen, Radio, Bell, Settings, Zap } from 'lucide-react';
+import { LayoutDashboard, DoorOpen, Radio, Siren, Settings, Zap } from 'lucide-react';
 import { PageType } from '../App';
 
 interface SidebarProps {
   currentPage: PageType;
   onNavigate: (page: PageType) => void;
+  isAdmin?: boolean;
 }
 
-const navItems = [
-  { id: 'dashboard' as PageType, label: 'Dashboard', icon: LayoutDashboard },
-  { id: 'rooms' as PageType, label: 'Rooms', icon: DoorOpen },
-  { id: 'room-details' as PageType, label: 'Live Monitoring', icon: Radio },
-  { id: 'alerts' as PageType, label: 'Alerts', icon: Bell },
-  { id: 'settings' as PageType, label: 'Settings', icon: Settings },
+const allNavItems = [
+  { id: 'dashboard' as PageType, label: 'Dashboard', icon: LayoutDashboard, adminOnly: false },
+  { id: 'rooms' as PageType, label: 'Rooms', icon: DoorOpen, adminOnly: false },
+  { id: 'room-details' as PageType, label: 'Live Monitoring', icon: Radio, adminOnly: false },
+  { id: 'alerts' as PageType, label: 'Alerts', icon: Siren, adminOnly: false },
+  { id: 'settings' as PageType, label: 'Settings', icon: Settings, adminOnly: true },
 ];
 
-export default function Sidebar({ currentPage, onNavigate }: SidebarProps) {
+export default function Sidebar({ currentPage, onNavigate, isAdmin = false }: SidebarProps) {
+  const navItems = allNavItems.filter((item) => !item.adminOnly || isAdmin);
   return (
     <aside className="w-64 bg-white border-r border-gray-200 flex flex-col">
       {/* Logo */}

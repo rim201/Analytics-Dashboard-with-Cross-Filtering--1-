@@ -2,17 +2,24 @@ import { Users, Cpu, Shield, Settings as SettingsIcon, Wifi, Brain, CheckCircle,
 import React, { useEffect, useState } from 'react';
 import {
   createDevice,
-  createUser,
   deleteDevice,
-  deleteUser,
   listDevices,
   listRooms,
   listUsers,
+  deleteUser,
   updateDevice,
   updateUser,
   type DeviceRecord,
   type UserRecord,
 } from '../services/firestoreApi';
+import {
+  createUserWithProfile,
+  createUserWithProfileErrorMessage,
+  DEFAULT_ADMIN_EMAIL,
+  isLeoniDefaultAdminEmail,
+  roleLabel,
+} from '../services/auth';
+import { auth } from '../firebase';
 
 interface ToastState {
   type: 'success' | 'error';
@@ -31,7 +38,8 @@ export default function AdminSettings() {
   const [userForm, setUserForm] = useState({
     name: '',
     email: '',
-    role: 'Employee' as UserRecord['role'],
+    password: '',
+    role: 'user' as UserRecord['role'],
     status: 'active' as UserRecord['status'],
   });
   const [deviceForm, setDeviceForm] = useState({
@@ -41,7 +49,7 @@ export default function AdminSettings() {
     status: 'online' as DeviceRecord['status'],
   });
   const [toast, setToast] = useState<ToastState | null>(null);
-  const [userErrors, setUserErrors] = useState<{ name?: string; email?: string }>({});
+  const [userErrors, setUserErrors] = useState<{ name?: string; email?: string; password?: string }>({});
   const [deviceErrors, setDeviceErrors] = useState<{ name?: string }>({});
 
   const showToast = (type: ToastState['type'], message: string) => {
@@ -70,7 +78,7 @@ export default function AdminSettings() {
 
   const openAddUserModal = () => {
     setEditingUser(null);
-    setUserForm({ name: '', email: '', role: 'Employee', status: 'active' });
+    setUserForm({ name: '', email: '', password: '', role: 'user', status: 'active' });
     setUserErrors({});
     setUserModalOpen(true);
   };
@@ -80,6 +88,7 @@ export default function AdminSettings() {
     setUserForm({
       name: user.name,
       email: user.email,
+      password: '',
       role: user.role,
       status: user.status,
     });
@@ -89,34 +98,82 @@ export default function AdminSettings() {
 
   const submitUserForm = async (e: React.FormEvent) => {
     e.preventDefault();
-    const errors: { name?: string; email?: string } = {};
-    if (!userForm.name.trim()) errors.name = 'Name is required.';
-    if (!userForm.email.trim()) errors.email = 'Email is required.';
-    else if (!/\S+@\S+\.\S+/.test(userForm.email)) errors.email = 'Invalid email format.';
+    const errors: { name?: string; email?: string; password?: string } = {};
+    const nameTrim = userForm.name.trim();
+    const emailTrim = userForm.email.trim();
+    const emailLc = emailTrim.toLowerCase();
+
+    if (!nameTrim) errors.name = 'Le nom est obligatoire.';
+    else if (nameTrim.length > 120) errors.name = 'Nom trop long (120 caractères max).';
+
+    if (!emailTrim) errors.email = 'L’e-mail est obligatoire.';
+    else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(emailTrim)) {
+      errors.email = 'Format d’e-mail invalide.';
+    }
+
+    if (!editingUser) {
+      if (isLeoniDefaultAdminEmail(emailLc)) {
+        errors.email = `L’adresse ${DEFAULT_ADMIN_EMAIL} est réservée au compte administrateur système.`;
+      } else if (users.some((u) => u.email.toLowerCase() === emailLc)) {
+        errors.email =
+          'Un profil avec cet e-mail existe déjà. Modifiez l’utilisateur ou utilisez un autre e-mail.';
+      }
+      if (!userForm.password || userForm.password.length < 6) {
+        errors.password = 'Le mot de passe doit contenir au moins 6 caractères.';
+      } else if (userForm.password.length > 128) {
+        errors.password = 'Mot de passe trop long (128 caractères max).';
+      }
+    }
+
     setUserErrors(errors);
     if (Object.keys(errors).length > 0) return;
     try {
       if (editingUser) {
-        await updateUser(editingUser.id, userForm);
+        const role = isLeoniDefaultAdminEmail(editingUser.email) ? 'admin' : userForm.role;
+        await updateUser(editingUser.id, {
+          name: nameTrim,
+          email: emailTrim,
+          role,
+          status: userForm.status,
+        });
       } else {
-        await createUser(userForm);
+        await createUserWithProfile(emailTrim, userForm.password, {
+          name: nameTrim,
+          role: userForm.role,
+          status: userForm.status,
+        });
       }
       setUserModalOpen(false);
       await reloadAll();
       showToast('success', editingUser ? 'User updated successfully.' : 'User created successfully.');
-    } catch {
-      showToast('error', 'Failed to save user.');
+    } catch (err) {
+      showToast('error', editingUser ? 'Échec de l’enregistrement.' : createUserWithProfileErrorMessage(err));
     }
   };
 
   const deleteUserById = async (id: string) => {
-    if (!window.confirm('Delete this user?')) return;
+    const row = users.find((u) => u.id === id);
+    if (row && isLeoniDefaultAdminEmail(row.email)) {
+      showToast('error', 'Ce compte administrateur principal ne peut pas être supprimé.');
+      return;
+    }
+    if (id === auth.currentUser?.uid) {
+      showToast('error', 'Vous ne pouvez pas supprimer votre propre compte.');
+      return;
+    }
+    if (
+      !window.confirm(
+        'Supprimer cet utilisateur ?\n\nLe profil sera supprimé de Firestore. Le compte Firebase Authentication (connexion) reste inchangé — vous pourrez le retirer manuellement dans la console Firebase si besoin.',
+      )
+    ) {
+      return;
+    }
     try {
       await deleteUser(id);
       await reloadAll();
-      showToast('success', 'User deleted successfully.');
+      showToast('success', 'Profil utilisateur supprimé.');
     } catch {
-      showToast('error', 'Failed to delete user.');
+      showToast('error', 'Impossible de supprimer le profil.');
     }
   };
 
@@ -311,10 +368,17 @@ export default function AdminSettings() {
                         </div>
                       </div>
                     </td>
-                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-600">{user.email}</td>
+                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-600">
+                      <span className="align-middle">{user.email}</span>
+                      {user.mustChangePassword ? (
+                        <span className="ml-2 inline-flex align-middle px-2 py-0.5 rounded-lg text-xs font-medium bg-amber-100 text-amber-800 border border-amber-200">
+                          MDP à définir
+                        </span>
+                      ) : null}
+                    </td>
                     <td className="px-6 py-4 whitespace-nowrap">
                       <span className="px-3 py-1 bg-blue-100 text-blue-700 rounded-lg text-xs font-medium">
-                        {user.role}
+                        {roleLabel(user.role)}
                       </span>
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap">
@@ -327,9 +391,11 @@ export default function AdminSettings() {
                         <button onClick={() => openEditUserModal(user)} className="p-2 text-blue-600 hover:bg-blue-50 rounded-lg transition">
                           <Edit className="w-4 h-4" />
                         </button>
-                        <button onClick={() => deleteUserById(user.id)} className="p-2 text-red-600 hover:bg-red-50 rounded-lg transition">
-                          <Trash2 className="w-4 h-4" />
-                        </button>
+                        {!isLeoniDefaultAdminEmail(user.email) ? (
+                          <button onClick={() => deleteUserById(user.id)} className="p-2 text-red-600 hover:bg-red-50 rounded-lg transition">
+                            <Trash2 className="w-4 h-4" />
+                          </button>
+                        ) : null}
                       </div>
                     </td>
                   </tr>
@@ -530,17 +596,45 @@ export default function AdminSettings() {
             </div>
             <div>
               <label className="block text-sm text-gray-600 mb-1">Email</label>
-              <input type="email" value={userForm.email} onChange={(e) => setUserForm((p) => ({ ...p, email: e.target.value }))} className="w-full px-3 py-2 border border-gray-300 rounded-xl outline-none focus:ring-2 focus:ring-emerald-500" required />
+              <input
+                type="email"
+                value={userForm.email}
+                onChange={(e) => setUserForm((p) => ({ ...p, email: e.target.value }))}
+                disabled={!!editingUser}
+                className="w-full px-3 py-2 border border-gray-300 rounded-xl outline-none focus:ring-2 focus:ring-emerald-500 disabled:bg-gray-100"
+                required
+              />
               {userErrors.email && <p className="text-xs text-red-600 mt-1">{userErrors.email}</p>}
             </div>
+            {!editingUser && (
+              <div>
+                <label className="block text-sm text-gray-600 mb-1">Password</label>
+                <input
+                  type="password"
+                  value={userForm.password}
+                  onChange={(e) => setUserForm((p) => ({ ...p, password: e.target.value }))}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-xl outline-none focus:ring-2 focus:ring-emerald-500"
+                  autoComplete="new-password"
+                />
+                {userErrors.password && <p className="text-xs text-red-600 mt-1">{userErrors.password}</p>}
+              </div>
+            )}
             <div className="grid grid-cols-2 gap-3">
               <div>
                 <label className="block text-sm text-gray-600 mb-1">Role</label>
-                <select value={userForm.role} onChange={(e) => setUserForm((p) => ({ ...p, role: e.target.value as UserRecord['role'] }))} className="w-full px-3 py-2 border border-gray-300 rounded-xl outline-none focus:ring-2 focus:ring-emerald-500">
-                  <option>Admin</option>
-                  <option>Facility Manager</option>
-                  <option>Employee</option>
+                <select
+                  value={userForm.role}
+                  onChange={(e) => setUserForm((p) => ({ ...p, role: e.target.value as UserRecord['role'] }))}
+                  disabled={!!editingUser && isLeoniDefaultAdminEmail(editingUser.email)}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-xl outline-none focus:ring-2 focus:ring-emerald-500 disabled:bg-gray-100 disabled:text-gray-600"
+                >
+                  <option value="admin">admin</option>
+                  <option value="user">user</option>
+                  <option value="technicien">technicien</option>
                 </select>
+                {editingUser && isLeoniDefaultAdminEmail(editingUser.email) ? (
+                  <p className="text-xs text-gray-500 mt-1">Le rôle admin de ce compte ne peut pas être modifié.</p>
+                ) : null}
               </div>
               <div>
                 <label className="block text-sm text-gray-600 mb-1">Status</label>

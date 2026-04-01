@@ -1,17 +1,29 @@
 import { useState } from 'react';
 import { Lock, Mail, Zap, Wifi, Thermometer, Wind } from 'lucide-react';
+import {
+  signInWithCredentials,
+  authErrorMessage,
+} from '../services/auth';
 
-interface LoginPageProps {
-  onLogin: () => void;
-}
-
-export default function LoginPage({ onLogin }: LoginPageProps) {
+export default function LoginPage() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    onLogin();
+    setError(null);
+    setSubmitting(true);
+    try {
+      await signInWithCredentials(email, password);
+    } catch (e: unknown) {
+      const code =
+        e && typeof e === 'object' && 'code' in e ? String((e as { code: string }).code) : '';
+      setError(code ? authErrorMessage(code) : 'Connexion impossible.');
+    } finally {
+      setSubmitting(false);
+    }
   };
 
   return (
@@ -61,7 +73,12 @@ export default function LoginPage({ onLogin }: LoginPageProps) {
             </div>
 
             {/* Login Form */}
-            <form onSubmit={handleSubmit} className="space-y-4">
+            <form onSubmit={(e) => void handleSubmit(e)} className="space-y-4">
+              {error && (
+                <div className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700" role="alert">
+                  {error}
+                </div>
+              )}
               <div className="space-y-2">
                 <label htmlFor="email" className="block text-sm font-medium text-gray-700">
                   Email Address
@@ -76,6 +93,7 @@ export default function LoginPage({ onLogin }: LoginPageProps) {
                     placeholder="user@company.com"
                     className="w-full pl-10 pr-4 py-3 border border-gray-300 rounded-xl focus:ring-2 focus:ring-emerald-500 focus:border-transparent outline-none transition"
                     required
+                    disabled={submitting}
                   />
                 </div>
               </div>
@@ -94,6 +112,7 @@ export default function LoginPage({ onLogin }: LoginPageProps) {
                     placeholder="Enter your password"
                     className="w-full pl-10 pr-4 py-3 border border-gray-300 rounded-xl focus:ring-2 focus:ring-emerald-500 focus:border-transparent outline-none transition"
                     required
+                    disabled={submitting}
                   />
                 </div>
               </div>
@@ -110,17 +129,13 @@ export default function LoginPage({ onLogin }: LoginPageProps) {
 
               <button
                 type="submit"
-                className="w-full bg-gradient-to-r from-emerald-500 to-emerald-600 text-white py-3 rounded-xl font-medium hover:from-emerald-600 hover:to-emerald-700 transition shadow-lg shadow-emerald-500/30"
+                disabled={submitting}
+                className="w-full bg-gradient-to-r from-emerald-500 to-emerald-600 text-white py-3 rounded-xl font-medium hover:from-emerald-600 hover:to-emerald-700 transition shadow-lg shadow-emerald-500/30 disabled:opacity-60"
               >
-                Sign In
+                {submitting ? 'Connexion…' : 'Sign In'}
               </button>
             </form>
 
-            <div className="pt-4 border-t border-gray-200">
-              <p className="text-center text-sm text-gray-600">
-                Demo Credentials: <span className="font-medium text-gray-900">Any email/password</span>
-              </p>
-            </div>
           </div>
         </div>
       </div>
