@@ -1,6 +1,10 @@
 import { useState } from 'react';
 import { Lock, Mail, Zap, Wifi, Thermometer, Wind } from 'lucide-react';
-import { authErrorMessage, signInWithCredentials } from '../services/auth';
+import {
+  authErrorMessage,
+  clearLoginNoticeStorage,
+  signInWithCredentials,
+} from '../services/auth';
 
 function readInitialLoginNotice(): string | null {
   try {
@@ -23,6 +27,7 @@ export default function LoginPage() {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    clearLoginNoticeStorage();
     setError(null);
     setSubmitting(true);
     try {

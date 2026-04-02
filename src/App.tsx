@@ -14,6 +14,7 @@ import TopNav from './components/TopNav';
 import { auth } from './firebase';
 import {
   ACCOUNT_INACTIVE_LOGIN_MESSAGE,
+  clearLoginNoticeStorage,
   ensureDefaultAdminUser,
   ensureProfileAfterLogin,
   fetchUserProfile,
@@ -64,6 +65,7 @@ function App() {
             setAuthUser(null);
             setUserProfile(null);
           } else {
+            clearLoginNoticeStorage();
             setAuthUser(user);
             setUserProfile(profile);
           }
@@ -135,6 +137,7 @@ function App() {
             setUserProfile(null);
             return;
           }
+          clearLoginNoticeStorage();
           setUserProfile(next);
         }}
       />

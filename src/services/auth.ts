@@ -18,6 +18,17 @@ export const DEFAULT_ADMIN_PASSWORD = 'Superviseur***';
 export const ACCOUNT_INACTIVE_LOGIN_MESSAGE =
   'Votre compte est désactivé. Veuillez contacter un administrateur pour réactiver votre accès.';
 
+const LOGIN_NOTICE_STORAGE_KEY = 'loginNotice';
+
+/** Efface le message persistant sur l’écran de connexion (après succès ou nouvelle tentative). */
+export function clearLoginNoticeStorage(): void {
+  try {
+    sessionStorage.removeItem(LOGIN_NOTICE_STORAGE_KEY);
+  } catch {
+    /* ignore */
+  }
+}
+
 const PROFILES = 'userProfiles';
 
 export type UserProfile = {
@@ -131,6 +142,7 @@ export async function signInWithCredentials(email: string, password: string): Pr
     (err as Error & { code: string }).code = 'auth/account-inactive';
     throw err;
   }
+  clearLoginNoticeStorage();
   return profile;
 }
 
