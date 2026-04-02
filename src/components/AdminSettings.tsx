@@ -76,7 +76,21 @@ export default function AdminSettings() {
     void reloadAll();
   }, []);
 
+  const selectTab = (tab: typeof activeTab) => {
+    setActiveTab(tab);
+    if (tab !== 'users') {
+      setUserModalOpen(false);
+      setEditingUser(null);
+    }
+    if (tab !== 'devices') {
+      setDeviceModalOpen(false);
+      setEditingDevice(null);
+    }
+  };
+
   const openAddUserModal = () => {
+    setDeviceModalOpen(false);
+    setEditingDevice(null);
     setEditingUser(null);
     setUserForm({ name: '', email: '', password: '', role: 'user', status: 'active' });
     setUserErrors({});
@@ -84,6 +98,8 @@ export default function AdminSettings() {
   };
 
   const openEditUserModal = (user: UserRecord) => {
+    setDeviceModalOpen(false);
+    setEditingDevice(null);
     setEditingUser(user);
     setUserForm({
       name: user.name,
@@ -144,6 +160,7 @@ export default function AdminSettings() {
         });
       }
       setUserModalOpen(false);
+      setEditingUser(null);
       await reloadAll();
       showToast('success', editingUser ? 'User updated successfully.' : 'User created successfully.');
     } catch (err) {
@@ -178,6 +195,8 @@ export default function AdminSettings() {
   };
 
   const openAddDeviceModal = () => {
+    setUserModalOpen(false);
+    setEditingUser(null);
     setEditingDevice(null);
     setDeviceForm({
       name: '',
@@ -190,6 +209,8 @@ export default function AdminSettings() {
   };
 
   const openEditDeviceModal = (device: DeviceRecord) => {
+    setUserModalOpen(false);
+    setEditingUser(null);
     setEditingDevice(device);
     setDeviceForm({
       name: device.name,
@@ -223,6 +244,7 @@ export default function AdminSettings() {
         });
       }
       setDeviceModalOpen(false);
+      setEditingDevice(null);
       await reloadAll();
       showToast('success', editingDevice ? 'Device updated successfully.' : 'Device created successfully.');
     } catch {
@@ -321,7 +343,8 @@ export default function AdminSettings() {
           return (
             <button
               key={tab.id}
-              onClick={() => setActiveTab(tab.id)}
+              type="button"
+              onClick={() => selectTab(tab.id)}
               className={`flex items-center space-x-2 px-4 py-2 rounded-xl font-medium transition ${
                 activeTab === tab.id
                   ? 'bg-emerald-500 text-white shadow-md'
@@ -340,10 +363,109 @@ export default function AdminSettings() {
         <div className="bg-white rounded-2xl shadow-lg border border-gray-100 overflow-hidden">
           <div className="p-6 border-b border-gray-100 flex items-center justify-between">
             <h3 className="font-semibold text-gray-900">User Management</h3>
-            <button onClick={openAddUserModal} className="px-4 py-2 bg-emerald-500 text-white rounded-xl font-medium hover:bg-emerald-600 transition">
+            <button
+              type="button"
+              onClick={openAddUserModal}
+              className="px-4 py-2 bg-emerald-500 text-white rounded-xl font-medium hover:bg-emerald-600 transition"
+            >
               Add User
             </button>
           </div>
+          {userModalOpen && (
+            <div className="border-b border-gray-200 bg-gray-50 px-6 py-5">
+              <form onSubmit={submitUserForm} className="mx-auto max-w-2xl space-y-4">
+                <h3 className="text-lg font-semibold text-gray-900">
+                  {editingUser ? 'Edit User' : 'Add User'}
+                </h3>
+                <div>
+                  <label className="mb-1 block text-sm text-gray-600">Name</label>
+                  <input
+                    value={userForm.name}
+                    onChange={(e) => setUserForm((p) => ({ ...p, name: e.target.value }))}
+                    className="w-full rounded-xl border border-gray-300 px-3 py-2 outline-none focus:ring-2 focus:ring-emerald-500"
+                    required
+                  />
+                  {userErrors.name && <p className="mt-1 text-xs text-red-600">{userErrors.name}</p>}
+                </div>
+                <div>
+                  <label className="mb-1 block text-sm text-gray-600">Email</label>
+                  <input
+                    type="email"
+                    value={userForm.email}
+                    onChange={(e) => setUserForm((p) => ({ ...p, email: e.target.value }))}
+                    disabled={!!editingUser}
+                    className="w-full rounded-xl border border-gray-300 px-3 py-2 outline-none focus:ring-2 focus:ring-emerald-500 disabled:bg-gray-100"
+                    required
+                  />
+                  {userErrors.email && <p className="mt-1 text-xs text-red-600">{userErrors.email}</p>}
+                </div>
+                {!editingUser && (
+                  <div>
+                    <label className="mb-1 block text-sm text-gray-600">Password</label>
+                    <input
+                      type="password"
+                      value={userForm.password}
+                      onChange={(e) => setUserForm((p) => ({ ...p, password: e.target.value }))}
+                      className="w-full rounded-xl border border-gray-300 px-3 py-2 outline-none focus:ring-2 focus:ring-emerald-500"
+                      autoComplete="new-password"
+                    />
+                    {userErrors.password && <p className="mt-1 text-xs text-red-600">{userErrors.password}</p>}
+                  </div>
+                )}
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="mb-1 block text-sm text-gray-600">Role</label>
+                    <select
+                      value={userForm.role}
+                      onChange={(e) =>
+                        setUserForm((p) => ({ ...p, role: e.target.value as UserRecord['role'] }))
+                      }
+                      disabled={!!editingUser && isLeoniDefaultAdminEmail(editingUser.email)}
+                      className="w-full rounded-xl border border-gray-300 px-3 py-2 outline-none focus:ring-2 focus:ring-emerald-500 disabled:bg-gray-100 disabled:text-gray-600"
+                    >
+                      <option value="admin">admin</option>
+                      <option value="user">user</option>
+                      <option value="technicien">technicien</option>
+                    </select>
+                    {editingUser && isLeoniDefaultAdminEmail(editingUser.email) ? (
+                      <p className="mt-1 text-xs text-gray-500">
+                        Le rôle admin de ce compte ne peut pas être modifié.
+                      </p>
+                    ) : null}
+                  </div>
+                  <div>
+                    <label className="mb-1 block text-sm text-gray-600">Status</label>
+                    <select
+                      value={userForm.status}
+                      onChange={(e) =>
+                        setUserForm((p) => ({ ...p, status: e.target.value as UserRecord['status'] }))
+                      }
+                      className="w-full rounded-xl border border-gray-300 px-3 py-2 outline-none focus:ring-2 focus:ring-emerald-500"
+                    >
+                      <option value="active">active</option>
+                      <option value="inactive">inactive</option>
+                    </select>
+                  </div>
+                </div>
+                <div className="flex justify-end gap-2 pt-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setUserModalOpen(false);
+                      setEditingUser(null);
+                      setUserErrors({});
+                    }}
+                    className="rounded-xl border border-gray-300 px-4 py-2 text-gray-700 hover:bg-gray-50"
+                  >
+                    Cancel
+                  </button>
+                  <button type="submit" className="rounded-xl bg-emerald-500 px-4 py-2 text-white hover:bg-emerald-600">
+                    {editingUser ? 'Save' : 'Create'}
+                  </button>
+                </div>
+              </form>
+            </div>
+          )}
           <div className="overflow-x-auto">
             <table className="w-full">
               <thead className="bg-gray-50">
@@ -410,10 +532,118 @@ export default function AdminSettings() {
         <div className="bg-white rounded-2xl shadow-lg border border-gray-100 overflow-hidden">
           <div className="p-6 border-b border-gray-100 flex items-center justify-between">
             <h3 className="font-semibold text-gray-900">IoT Devices Management</h3>
-            <button onClick={openAddDeviceModal} className="px-4 py-2 bg-emerald-500 text-white rounded-xl font-medium hover:bg-emerald-600 transition">
+            <button
+              type="button"
+              onClick={openAddDeviceModal}
+              className="px-4 py-2 bg-emerald-500 text-white rounded-xl font-medium hover:bg-emerald-600 transition"
+            >
               Add Device
             </button>
           </div>
+          {deviceModalOpen && (
+            <div className="border-b border-gray-200 bg-gray-50 px-6 py-5">
+              <form onSubmit={submitDeviceForm} className="mx-auto max-w-2xl space-y-4">
+                <h3 className="text-lg font-semibold text-gray-900">
+                  {editingDevice ? 'Edit Device' : 'Add Device'}
+                </h3>
+                <div>
+                  <label className="mb-1 block text-sm text-gray-600">Name</label>
+                  <input
+                    value={deviceForm.name}
+                    onChange={(e) => setDeviceForm((p) => ({ ...p, name: e.target.value }))}
+                    className="w-full rounded-xl border border-gray-300 px-3 py-2 outline-none focus:ring-2 focus:ring-emerald-500"
+                    required
+                  />
+                  {deviceErrors.name && <p className="mt-1 text-xs text-red-600">{deviceErrors.name}</p>}
+                </div>
+                <div>
+                  <label className="mb-1 block text-sm text-gray-600">Device ID (hardware)</label>
+                  <input
+                    value={deviceForm.deviceId}
+                    onChange={(e) => setDeviceForm((p) => ({ ...p, deviceId: e.target.value }))}
+                    placeholder="Optional external ID"
+                    className="w-full rounded-xl border border-gray-300 px-3 py-2 font-mono text-sm outline-none focus:ring-2 focus:ring-emerald-500"
+                  />
+                </div>
+                {!editingDevice && (
+                  <p className="text-xs text-gray-500">
+                    La salle apparaîtra dans le tableau une fois l’appareil associé depuis la création d’une salle
+                    (Rooms).
+                  </p>
+                )}
+                {editingDevice ? (
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label className="mb-1 block text-sm text-gray-600">Room</label>
+                      <select
+                        value={deviceForm.roomId}
+                        onChange={(e) => setDeviceForm((p) => ({ ...p, roomId: e.target.value }))}
+                        className="w-full rounded-xl border border-gray-300 px-3 py-2 outline-none focus:ring-2 focus:ring-emerald-500"
+                      >
+                        <option value="">— Non assigné —</option>
+                        {rooms.map((room) => (
+                          <option key={room.id} value={room.id}>
+                            {room.name}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                    <div>
+                      <label className="mb-1 block text-sm text-gray-600">Status</label>
+                      <select
+                        value={deviceForm.status}
+                        onChange={(e) =>
+                          setDeviceForm((p) => ({
+                            ...p,
+                            status: e.target.value as DeviceRecord['status'],
+                          }))
+                        }
+                        className="w-full rounded-xl border border-gray-300 px-3 py-2 outline-none focus:ring-2 focus:ring-emerald-500"
+                      >
+                        <option value="online">online</option>
+                        <option value="offline">offline</option>
+                        <option value="error">error</option>
+                      </select>
+                    </div>
+                  </div>
+                ) : (
+                  <div>
+                    <label className="mb-1 block text-sm text-gray-600">Status</label>
+                    <select
+                      value={deviceForm.status}
+                      onChange={(e) =>
+                        setDeviceForm((p) => ({
+                          ...p,
+                          status: e.target.value as DeviceRecord['status'],
+                        }))
+                      }
+                      className="w-full rounded-xl border border-gray-300 px-3 py-2 outline-none focus:ring-2 focus:ring-emerald-500"
+                    >
+                      <option value="online">online</option>
+                      <option value="offline">offline</option>
+                      <option value="error">error</option>
+                    </select>
+                  </div>
+                )}
+                <div className="flex justify-end gap-2 pt-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setDeviceModalOpen(false);
+                      setEditingDevice(null);
+                      setDeviceErrors({});
+                    }}
+                    className="rounded-xl border border-gray-300 px-4 py-2 text-gray-700 hover:bg-gray-50"
+                  >
+                    Cancel
+                  </button>
+                  <button type="submit" className="rounded-xl bg-emerald-500 px-4 py-2 text-white hover:bg-emerald-600">
+                    {editingDevice ? 'Save' : 'Create'}
+                  </button>
+                </div>
+              </form>
+            </div>
+          )}
           <div className="overflow-x-auto">
             <table className="w-full">
               <thead className="bg-gray-50">
@@ -582,134 +812,6 @@ export default function AdminSettings() {
               </div>
             </div>
           </div>
-        </div>
-      )}
-
-      {userModalOpen && (
-        <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4">
-          <form onSubmit={submitUserForm} className="w-full max-w-md bg-white rounded-2xl shadow-xl border border-gray-200 p-6 space-y-4">
-            <h3 className="text-lg font-semibold text-gray-900">{editingUser ? 'Edit User' : 'Add User'}</h3>
-            <div>
-              <label className="block text-sm text-gray-600 mb-1">Name</label>
-              <input value={userForm.name} onChange={(e) => setUserForm((p) => ({ ...p, name: e.target.value }))} className="w-full px-3 py-2 border border-gray-300 rounded-xl outline-none focus:ring-2 focus:ring-emerald-500" required />
-              {userErrors.name && <p className="text-xs text-red-600 mt-1">{userErrors.name}</p>}
-            </div>
-            <div>
-              <label className="block text-sm text-gray-600 mb-1">Email</label>
-              <input
-                type="email"
-                value={userForm.email}
-                onChange={(e) => setUserForm((p) => ({ ...p, email: e.target.value }))}
-                disabled={!!editingUser}
-                className="w-full px-3 py-2 border border-gray-300 rounded-xl outline-none focus:ring-2 focus:ring-emerald-500 disabled:bg-gray-100"
-                required
-              />
-              {userErrors.email && <p className="text-xs text-red-600 mt-1">{userErrors.email}</p>}
-            </div>
-            {!editingUser && (
-              <div>
-                <label className="block text-sm text-gray-600 mb-1">Password</label>
-                <input
-                  type="password"
-                  value={userForm.password}
-                  onChange={(e) => setUserForm((p) => ({ ...p, password: e.target.value }))}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-xl outline-none focus:ring-2 focus:ring-emerald-500"
-                  autoComplete="new-password"
-                />
-                {userErrors.password && <p className="text-xs text-red-600 mt-1">{userErrors.password}</p>}
-              </div>
-            )}
-            <div className="grid grid-cols-2 gap-3">
-              <div>
-                <label className="block text-sm text-gray-600 mb-1">Role</label>
-                <select
-                  value={userForm.role}
-                  onChange={(e) => setUserForm((p) => ({ ...p, role: e.target.value as UserRecord['role'] }))}
-                  disabled={!!editingUser && isLeoniDefaultAdminEmail(editingUser.email)}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-xl outline-none focus:ring-2 focus:ring-emerald-500 disabled:bg-gray-100 disabled:text-gray-600"
-                >
-                  <option value="admin">admin</option>
-                  <option value="user">user</option>
-                  <option value="technicien">technicien</option>
-                </select>
-                {editingUser && isLeoniDefaultAdminEmail(editingUser.email) ? (
-                  <p className="text-xs text-gray-500 mt-1">Le rôle admin de ce compte ne peut pas être modifié.</p>
-                ) : null}
-              </div>
-              <div>
-                <label className="block text-sm text-gray-600 mb-1">Status</label>
-                <select value={userForm.status} onChange={(e) => setUserForm((p) => ({ ...p, status: e.target.value as UserRecord['status'] }))} className="w-full px-3 py-2 border border-gray-300 rounded-xl outline-none focus:ring-2 focus:ring-emerald-500">
-                  <option value="active">active</option>
-                  <option value="inactive">inactive</option>
-                </select>
-              </div>
-            </div>
-            <div className="flex justify-end gap-2 pt-2">
-              <button type="button" onClick={() => setUserModalOpen(false)} className="px-4 py-2 border border-gray-300 rounded-xl text-gray-700 hover:bg-gray-50">Cancel</button>
-              <button type="submit" className="px-4 py-2 bg-emerald-500 text-white rounded-xl hover:bg-emerald-600">{editingUser ? 'Save' : 'Create'}</button>
-            </div>
-          </form>
-        </div>
-      )}
-
-      {deviceModalOpen && (
-        <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4">
-          <form onSubmit={submitDeviceForm} className="w-full max-w-md bg-white rounded-2xl shadow-xl border border-gray-200 p-6 space-y-4">
-            <h3 className="text-lg font-semibold text-gray-900">{editingDevice ? 'Edit Device' : 'Add Device'}</h3>
-            <div>
-              <label className="block text-sm text-gray-600 mb-1">Name</label>
-              <input value={deviceForm.name} onChange={(e) => setDeviceForm((p) => ({ ...p, name: e.target.value }))} className="w-full px-3 py-2 border border-gray-300 rounded-xl outline-none focus:ring-2 focus:ring-emerald-500" required />
-              {deviceErrors.name && <p className="text-xs text-red-600 mt-1">{deviceErrors.name}</p>}
-            </div>
-            <div>
-              <label className="block text-sm text-gray-600 mb-1">Device ID (hardware)</label>
-              <input
-                value={deviceForm.deviceId}
-                onChange={(e) => setDeviceForm((p) => ({ ...p, deviceId: e.target.value }))}
-                placeholder="Optional external ID"
-                className="w-full px-3 py-2 border border-gray-300 rounded-xl outline-none focus:ring-2 focus:ring-emerald-500 font-mono text-sm"
-              />
-            </div>
-            {!editingDevice && (
-              <p className="text-xs text-gray-500">
-                La salle apparaîtra dans le tableau une fois l’appareil associé depuis la création d’une salle (Rooms).
-              </p>
-            )}
-            {editingDevice ? (
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="block text-sm text-gray-600 mb-1">Room</label>
-                  <select value={deviceForm.roomId} onChange={(e) => setDeviceForm((p) => ({ ...p, roomId: e.target.value }))} className="w-full px-3 py-2 border border-gray-300 rounded-xl outline-none focus:ring-2 focus:ring-emerald-500">
-                    <option value="">— Non assigné —</option>
-                    {rooms.map((room) => (
-                      <option key={room.id} value={room.id}>{room.name}</option>
-                    ))}
-                  </select>
-                </div>
-                <div>
-                  <label className="block text-sm text-gray-600 mb-1">Status</label>
-                  <select value={deviceForm.status} onChange={(e) => setDeviceForm((p) => ({ ...p, status: e.target.value as DeviceRecord['status'] }))} className="w-full px-3 py-2 border border-gray-300 rounded-xl outline-none focus:ring-2 focus:ring-emerald-500">
-                    <option value="online">online</option>
-                    <option value="offline">offline</option>
-                    <option value="error">error</option>
-                  </select>
-                </div>
-              </div>
-            ) : (
-              <div>
-                <label className="block text-sm text-gray-600 mb-1">Status</label>
-                <select value={deviceForm.status} onChange={(e) => setDeviceForm((p) => ({ ...p, status: e.target.value as DeviceRecord['status'] }))} className="w-full px-3 py-2 border border-gray-300 rounded-xl outline-none focus:ring-2 focus:ring-emerald-500">
-                  <option value="online">online</option>
-                  <option value="offline">offline</option>
-                  <option value="error">error</option>
-                </select>
-              </div>
-            )}
-            <div className="flex justify-end gap-2 pt-2">
-              <button type="button" onClick={() => setDeviceModalOpen(false)} className="px-4 py-2 border border-gray-300 rounded-xl text-gray-700 hover:bg-gray-50">Cancel</button>
-              <button type="submit" className="px-4 py-2 bg-emerald-500 text-white rounded-xl hover:bg-emerald-600">{editingDevice ? 'Save' : 'Create'}</button>
-            </div>
-          </form>
         </div>
       )}
     </div>

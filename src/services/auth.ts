@@ -14,6 +14,10 @@ export type AppRole = 'admin' | 'user' | 'technicien';
 export const DEFAULT_ADMIN_EMAIL = 'admin@leoni.tn';
 export const DEFAULT_ADMIN_PASSWORD = 'Superviseur***';
 
+/** Message affiché quand un compte est inactif (connexion refusée ou session terminée). */
+export const ACCOUNT_INACTIVE_LOGIN_MESSAGE =
+  'Votre compte est désactivé. Veuillez contacter un administrateur pour réactiver votre accès.';
+
 const PROFILES = 'userProfiles';
 
 export type UserProfile = {
@@ -120,7 +124,14 @@ export async function ensureProfileAfterLogin(user: User): Promise<UserProfile> 
 
 export async function signInWithCredentials(email: string, password: string): Promise<UserProfile> {
   const cred = await signInWithEmailAndPassword(auth, email.trim(), password);
-  return ensureProfileAfterLogin(cred.user);
+  const profile = await ensureProfileAfterLogin(cred.user);
+  if (profile.status === 'inactive') {
+    await signOut(auth);
+    const err = new Error('account-inactive');
+    (err as Error & { code: string }).code = 'auth/account-inactive';
+    throw err;
+  }
+  return profile;
 }
 
 export async function signOutSession(): Promise<void> {
@@ -239,6 +250,8 @@ export function roleLabel(role: AppRole): string {
 
 export function authErrorMessage(code: string): string {
   switch (code) {
+    case 'auth/account-inactive':
+      return ACCOUNT_INACTIVE_LOGIN_MESSAGE;
     case 'auth/invalid-email':
       return 'Adresse e-mail invalide.';
     case 'auth/user-disabled':

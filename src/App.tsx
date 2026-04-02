@@ -13,9 +13,11 @@ import Sidebar from './components/Sidebar';
 import TopNav from './components/TopNav';
 import { auth } from './firebase';
 import {
+  ACCOUNT_INACTIVE_LOGIN_MESSAGE,
   ensureDefaultAdminUser,
   ensureProfileAfterLogin,
   fetchUserProfile,
+  signOutSession,
   type UserProfile,
 } from './services/auth';
 
@@ -44,16 +46,29 @@ function App() {
       await ensureDefaultAdminUser();
       if (cancelled) return;
       unsub = onAuthStateChanged(auth, async (user) => {
-        setAuthUser(user);
         if (!user) {
+          setAuthUser(null);
           setUserProfile(null);
           setAuthReady(true);
           return;
         }
         try {
           const profile = await ensureProfileAfterLogin(user);
-          setUserProfile(profile);
+          if (profile.status === 'inactive') {
+            try {
+              sessionStorage.setItem('loginNotice', ACCOUNT_INACTIVE_LOGIN_MESSAGE);
+            } catch {
+              /* ignore */
+            }
+            await signOutSession();
+            setAuthUser(null);
+            setUserProfile(null);
+          } else {
+            setAuthUser(user);
+            setUserProfile(profile);
+          }
         } catch {
+          setAuthUser(null);
           setUserProfile(null);
         } finally {
           setAuthReady(true);
@@ -97,7 +112,7 @@ function App() {
     );
   }
 
-  if (!authUser || !userProfile) {
+  if (!authUser || !userProfile || userProfile.status === 'inactive') {
     return <LoginPage />;
   }
 
@@ -108,9 +123,19 @@ function App() {
         email={authUser.email ?? userProfile.email}
         onSuccess={async () => {
           const next = await fetchUserProfile(authUser.uid);
-          if (next) {
-            setUserProfile(next);
+          if (!next) return;
+          if (next.status === 'inactive') {
+            try {
+              sessionStorage.setItem('loginNotice', ACCOUNT_INACTIVE_LOGIN_MESSAGE);
+            } catch {
+              /* ignore */
+            }
+            await signOutSession();
+            setAuthUser(null);
+            setUserProfile(null);
+            return;
           }
+          setUserProfile(next);
         }}
       />
     );

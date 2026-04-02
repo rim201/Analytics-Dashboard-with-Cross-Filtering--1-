@@ -1,15 +1,25 @@
 import { useState } from 'react';
 import { Lock, Mail, Zap, Wifi, Thermometer, Wind } from 'lucide-react';
-import {
-  signInWithCredentials,
-  authErrorMessage,
-} from '../services/auth';
+import { authErrorMessage, signInWithCredentials } from '../services/auth';
+
+function readInitialLoginNotice(): string | null {
+  try {
+    const msg = sessionStorage.getItem('loginNotice');
+    if (msg) {
+      sessionStorage.removeItem('loginNotice');
+      return msg;
+    }
+  } catch {
+    /* ignore */
+  }
+  return null;
+}
 
 export default function LoginPage() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [submitting, setSubmitting] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(() => readInitialLoginNotice());
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
