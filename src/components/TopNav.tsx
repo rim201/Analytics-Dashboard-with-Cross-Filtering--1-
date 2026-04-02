@@ -158,7 +158,7 @@ export default function TopNav({
             >
               <Bell className="w-5 h-5 shrink-0" strokeWidth={2} aria-hidden />
               {unreadCount > 0 && (
-                <span className="mb-px inline-flex h-3.5 min-w-[0.875rem] shrink-0 items-center justify-center whitespace-nowrap rounded-full bg-red-600 px-1 text-[9px] font-bold tabular-nums leading-none text-white">
+                <span className="inline-flex min-w-[0.75rem] shrink-0 translate-y-0.5 items-center justify-center self-end whitespace-nowrap px-[2px] text-[8px] font-bold tabular-nums leading-none text-red-600">
                   {unreadCount > 99 ? '99+' : unreadCount}
                 </span>
               )}
