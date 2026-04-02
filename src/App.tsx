@@ -50,6 +50,8 @@ function App() {
         if (!user) {
           setAuthUser(null);
           setUserProfile(null);
+          setCurrentPage('dashboard');
+          setSelectedRoomId(null);
           setAuthReady(true);
           return;
         }
