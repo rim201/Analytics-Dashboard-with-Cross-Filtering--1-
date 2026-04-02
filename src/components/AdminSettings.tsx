@@ -1,8 +1,22 @@
-import { Users, Cpu, Shield, Settings as SettingsIcon, Wifi, Brain, CheckCircle, AlertCircle, Trash2, Edit } from 'lucide-react';
+import {
+  Users,
+  Cpu,
+  Shield,
+  Settings as SettingsIcon,
+  Wifi,
+  Brain,
+  CheckCircle,
+  AlertCircle,
+  Trash2,
+  Edit,
+  CalendarClock,
+} from 'lucide-react';
 import React, { useEffect, useState } from 'react';
 import {
+  appendCurrentSnapshotsForAllRooms,
   createDevice,
   deleteDevice,
+  deleteRoomMeasurementsInRange,
   listDevices,
   listRooms,
   listUsers,
@@ -27,7 +41,7 @@ interface ToastState {
 }
 
 export default function AdminSettings() {
-  const [activeTab, setActiveTab] = useState<'users' | 'devices' | 'system' | 'ai'>('users');
+  const [activeTab, setActiveTab] = useState<'users' | 'devices' | 'roomData' | 'system' | 'ai'>('users');
   const [users, setUsers] = useState<UserRecord[]>([]);
   const [devices, setDevices] = useState<DeviceRecord[]>([]);
   const [rooms, setRooms] = useState<{ id: string; name: string }[]>([]);
@@ -51,6 +65,10 @@ export default function AdminSettings() {
   const [toast, setToast] = useState<ToastState | null>(null);
   const [userErrors, setUserErrors] = useState<{ name?: string; email?: string; password?: string }>({});
   const [deviceErrors, setDeviceErrors] = useState<{ name?: string }>({});
+  const [measureRoomId, setMeasureRoomId] = useState('');
+  const [measureDateFrom, setMeasureDateFrom] = useState('');
+  const [measureDateTo, setMeasureDateTo] = useState('');
+  const [measureBusy, setMeasureBusy] = useState(false);
 
   const showToast = (type: ToastState['type'], message: string) => {
     setToast({ type, message });
@@ -252,6 +270,52 @@ export default function AdminSettings() {
     }
   };
 
+  const handleAppendSnapshotsAllRooms = async () => {
+    setMeasureBusy(true);
+    try {
+      const n = await appendCurrentSnapshotsForAllRooms();
+      showToast('success', `${n} série(s) de mesures enregistrée(s) (date + temp., humidité, CO₂, bruit, lumière).`);
+    } catch {
+      showToast('error', 'Impossible d’enregistrer les mesures.');
+    } finally {
+      setMeasureBusy(false);
+    }
+  };
+
+  const handleDeleteMeasureRange = async () => {
+    if (!measureRoomId || !measureDateFrom || !measureDateTo) {
+      showToast('error', 'Choisissez une salle et les deux dates / heures.');
+      return;
+    }
+    const start = new Date(measureDateFrom);
+    const end = new Date(measureDateTo);
+    if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) {
+      showToast('error', 'Dates invalides.');
+      return;
+    }
+    if (start > end) {
+      showToast('error', 'La date de début doit précéder la fin.');
+      return;
+    }
+    const label = rooms.find((r) => r.id === measureRoomId)?.name ?? measureRoomId;
+    if (
+      !window.confirm(
+        `Supprimer toutes les mesures de « ${label} » entre ${start.toLocaleString('fr-FR')} et ${end.toLocaleString('fr-FR')} ?`,
+      )
+    ) {
+      return;
+    }
+    setMeasureBusy(true);
+    try {
+      const n = await deleteRoomMeasurementsInRange(measureRoomId, start, end);
+      showToast('success', `${n} enregistrement(s) supprimé(s).`);
+    } catch {
+      showToast('error', 'Impossible de supprimer (vérifiez les règles Firestore ou un index).');
+    } finally {
+      setMeasureBusy(false);
+    }
+  };
+
   const deleteDeviceById = async (id: string) => {
     if (!window.confirm('Delete this device?')) return;
     try {
@@ -336,6 +400,7 @@ export default function AdminSettings() {
         {[
           { id: 'users' as const, label: 'Users', icon: Users },
           { id: 'devices' as const, label: 'IoT Devices', icon: Wifi },
+          { id: 'roomData' as const, label: 'Mesures salles', icon: CalendarClock },
           { id: 'system' as const, label: 'System', icon: Cpu },
           { id: 'ai' as const, label: 'AI Config', icon: Brain },
         ].map((tab) => {
@@ -689,6 +754,78 @@ export default function AdminSettings() {
                 ))}
               </tbody>
             </table>
+          </div>
+        </div>
+      )}
+
+      {activeTab === 'roomData' && (
+        <div className="bg-white rounded-2xl shadow-lg border border-gray-100 overflow-hidden">
+          <div className="p-6 border-b border-gray-100">
+            <h3 className="font-semibold text-gray-900">Mesures salles (historique)</h3>
+            <p className="mt-2 text-sm text-gray-600 max-w-3xl">
+              Chaque enregistrement stocke la <strong>date</strong> et les valeurs{' '}
+              <strong>température, humidité, CO₂, bruit, lumière</strong>. L’affichage des courbes et des dernières
+              valeurs se fait dans le détail de chaque salle. Ici vous pouvez uniquement{' '}
+              <strong>supprimer un intervalle</strong> de mesures pour une salle, ou capturer l’état actuel de toutes les
+              salles.
+            </p>
+            <div className="mt-4 flex flex-wrap gap-3">
+              <button
+                type="button"
+                disabled={measureBusy || rooms.length === 0}
+                onClick={() => void handleAppendSnapshotsAllRooms()}
+                className="rounded-xl bg-emerald-600 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-700 disabled:opacity-50"
+              >
+                Capturer l’état actuel (toutes les salles)
+              </button>
+            </div>
+          </div>
+          <div className="p-6 space-y-5 max-w-2xl">
+            <div>
+              <label className="mb-1 block text-sm font-medium text-gray-700">Salle</label>
+              <select
+                value={measureRoomId}
+                onChange={(e) => setMeasureRoomId(e.target.value)}
+                className="w-full rounded-xl border border-gray-300 px-3 py-2 outline-none focus:ring-2 focus:ring-emerald-500"
+              >
+                <option value="">— Choisir —</option>
+                {rooms.map((room) => (
+                  <option key={room.id} value={room.id}>
+                    {room.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div className="grid gap-4 sm:grid-cols-2">
+              <div>
+                <label className="mb-1 block text-sm font-medium text-gray-700">Du (date et heure)</label>
+                <input
+                  type="datetime-local"
+                  value={measureDateFrom}
+                  onChange={(e) => setMeasureDateFrom(e.target.value)}
+                  className="w-full rounded-xl border border-gray-300 px-3 py-2 outline-none focus:ring-2 focus:ring-emerald-500"
+                />
+              </div>
+              <div>
+                <label className="mb-1 block text-sm font-medium text-gray-700">Au (date et heure)</label>
+                <input
+                  type="datetime-local"
+                  value={measureDateTo}
+                  onChange={(e) => setMeasureDateTo(e.target.value)}
+                  className="w-full rounded-xl border border-gray-300 px-3 py-2 outline-none focus:ring-2 focus:ring-emerald-500"
+                />
+              </div>
+            </div>
+            <div className="flex flex-wrap gap-3">
+              <button
+                type="button"
+                disabled={measureBusy}
+                onClick={() => void handleDeleteMeasureRange()}
+                className="rounded-xl border-2 border-red-900 bg-red-600 px-5 py-2.5 text-sm font-semibold !text-white shadow-md hover:bg-red-700 hover:border-red-950 disabled:cursor-not-allowed disabled:border-red-400 disabled:bg-red-400 disabled:!text-white disabled:opacity-100"
+              >
+                Supprimer la période
+              </button>
+            </div>
           </div>
         </div>
       )}

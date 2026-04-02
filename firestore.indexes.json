@@ -4,6 +4,11 @@
       "collectionGroup": "measurements",
       "queryScope": "COLLECTION_GROUP",
       "fields": [{ "fieldPath": "timestamp", "order": "DESCENDING" }]
+    },
+    {
+      "collectionGroup": "measurements",
+      "queryScope": "COLLECTION_GROUP",
+      "fields": [{ "fieldPath": "timestamp", "order": "ASCENDING" }]
     }
   ],
   "fieldOverrides": []

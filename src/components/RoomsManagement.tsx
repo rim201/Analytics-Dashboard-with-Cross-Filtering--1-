@@ -1,12 +1,13 @@
-import { Search, Filter, Users, Thermometer, Wind, Volume2, Sun, Plus, Trash2 } from 'lucide-react';
+import { Search, Filter, Users, Thermometer, Wind, Volume2, Sun, Plus, Trash2, Droplets } from 'lucide-react';
 import React, { useEffect, useRef, useState } from 'react';
 import {
   createRoom,
   deleteRoom,
   listDevices,
   listRooms,
+  listRoomsWithLatestMeasurements,
   type DeviceRecord,
-  type RoomRow,
+  type RoomListRow,
 } from '../services/firestoreApi';
 
 interface RoomsManagementProps {
@@ -22,7 +23,7 @@ const defaultAddForm = () => ({
 });
 
 export default function RoomsManagement({ onRoomSelect, isAdmin = false }: RoomsManagementProps) {
-  const [rooms, setRooms] = useState<RoomRow[]>([]);
+  const [rooms, setRooms] = useState<RoomListRow[]>([]);
   const [searchQuery, setSearchQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState<'all' | 'available' | 'busy'>('all');
   const [roomActionMessage, setRoomActionMessage] = useState<string>('');
@@ -36,7 +37,7 @@ export default function RoomsManagement({ onRoomSelect, isAdmin = false }: Rooms
 
   const fetchRooms = async () => {
     try {
-      const data = await listRooms();
+      const data = await listRoomsWithLatestMeasurements();
       setRooms(data);
     } catch {
       setRooms([]);
@@ -105,6 +106,7 @@ export default function RoomsManagement({ onRoomSelect, isAdmin = false }: Rooms
   });
 
   const getComfortColor = (score: number) => {
+    if (score <= 0) return 'text-gray-500 bg-gray-100 border-gray-200';
     if (score >= 90) return 'text-emerald-600 bg-emerald-50 border-emerald-200';
     if (score >= 80) return 'text-blue-600 bg-blue-50 border-blue-200';
     return 'text-amber-600 bg-amber-50 border-amber-200';
@@ -171,7 +173,7 @@ export default function RoomsManagement({ onRoomSelect, isAdmin = false }: Rooms
     }
   };
 
-  const handleDeleteRoom = async (room: RoomRow) => {
+  const handleDeleteRoom = async (room: RoomListRow) => {
     const ok = window.confirm(
       `Supprimer la salle « ${room.name} » ?\n\nCette action est irréversible. Cliquez sur OK pour supprimer, ou Annuler pour ne rien faire.`,
     );
@@ -426,7 +428,7 @@ export default function RoomsManagement({ onRoomSelect, isAdmin = false }: Rooms
               </div>
             </div>
 
-            {/* Sensor Metrics */}
+            {/* Capteurs : dernière mesure (date/heure) ; pas de donnée → -- */}
             <div className="p-6 bg-gray-50">
               <div className="grid grid-cols-2 gap-4">
                 <div className="flex items-center space-x-2">
@@ -435,7 +437,20 @@ export default function RoomsManagement({ onRoomSelect, isAdmin = false }: Rooms
                   </div>
                   <div>
                     <p className="text-xs text-gray-500">Temp</p>
-                    <p className="text-sm font-medium text-gray-900">{room.temperature}°C</p>
+                    <p className="text-sm font-medium text-gray-900 tabular-nums">
+                      {room.temperature != null ? `${room.temperature.toFixed(1)}°C` : '--'}
+                    </p>
+                  </div>
+                </div>
+                <div className="flex items-center space-x-2">
+                  <div className="w-8 h-8 bg-cyan-100 rounded-lg flex items-center justify-center">
+                    <Droplets className="w-4 h-4 text-cyan-600" />
+                  </div>
+                  <div>
+                    <p className="text-xs text-gray-500">Humidity</p>
+                    <p className="text-sm font-medium text-gray-900 tabular-nums">
+                      {room.humidity != null ? `${Math.round(room.humidity)}%` : '--'}
+                    </p>
                   </div>
                 </div>
                 <div className="flex items-center space-x-2">
@@ -444,7 +459,9 @@ export default function RoomsManagement({ onRoomSelect, isAdmin = false }: Rooms
                   </div>
                   <div>
                     <p className="text-xs text-gray-500">CO₂</p>
-                    <p className="text-sm font-medium text-gray-900">{room.co2} ppm</p>
+                    <p className="text-sm font-medium text-gray-900 tabular-nums">
+                      {room.co2 != null ? `${Math.round(room.co2)} ppm` : '--'}
+                    </p>
                   </div>
                 </div>
                 <div className="flex items-center space-x-2">
@@ -453,16 +470,20 @@ export default function RoomsManagement({ onRoomSelect, isAdmin = false }: Rooms
                   </div>
                   <div>
                     <p className="text-xs text-gray-500">Noise</p>
-                    <p className="text-sm font-medium text-gray-900">{room.noise} dB</p>
+                    <p className="text-sm font-medium text-gray-900 tabular-nums">
+                      {room.noise != null ? `${Math.round(room.noise)} dB` : '--'}
+                    </p>
                   </div>
                 </div>
-                <div className="flex items-center space-x-2">
-                  <div className="w-8 h-8 bg-amber-100 rounded-lg flex items-center justify-center">
+                <div className="flex items-center space-x-2 col-span-2">
+                  <div className="w-8 h-8 bg-amber-100 rounded-lg flex items-center justify-center shrink-0">
                     <Sun className="w-4 h-4 text-amber-600" />
                   </div>
                   <div>
                     <p className="text-xs text-gray-500">Light</p>
-                    <p className="text-sm font-medium text-gray-900">{room.light} lux</p>
+                    <p className="text-sm font-medium text-gray-900 tabular-nums">
+                      {room.light != null ? `${Math.round(room.light)} lux` : '--'}
+                    </p>
                   </div>
                 </div>
               </div>

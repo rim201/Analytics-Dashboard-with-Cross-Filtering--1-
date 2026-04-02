@@ -2,7 +2,8 @@ import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { ArrowLeft, Users, Thermometer, Wind, Volume2, Sun, Droplets, Brain, Plus } from 'lucide-react';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
 import '../styles/custom.css';
-import { getRoomById, listMeasurements, updateRoomLight } from '../services/firestoreApi';
+import { computeComfortScoreFromSensors } from '../services/comfortScore';
+import { getRoomById, listMeasurements, updateRoomLight, type MeasurementRow } from '../services/firestoreApi';
 
 const LUX_MIN = 150;
 const LUX_MAX = 1000;
@@ -17,35 +18,16 @@ interface RoomDetailsProps {
   onAddRoom?: () => void;
 }
 
-interface Measurement {
-  timestamp: string;
-  temperature: number;
-  humidity: number;
-  co2: number;
-  noise: number;
-  light: number;
-}
-
 interface RoomInfo {
   id: string;
   name: string;
   capacity: number;
   occupancy: number;
   status: 'available' | 'busy';
-  comfortScore?: number;
-  /** Lux issus du document Firestore `rooms` (modifiable par l’admin). */
-  light: number;
 }
 
-// Fallback mock data when API returns empty or fails
-const fallbackChartPoint = (base: number, variance: number) =>
-  Array.from({ length: 12 }, (_, i) => ({
-    time: `${i * 2}:00`,
-    value: base + (Math.random() - 0.5) * variance,
-  }));
-
 export default function RoomDetails({ roomId, onBack, isAdmin = false, onAddRoom }: RoomDetailsProps) {
-  const [measurements, setMeasurements] = useState<Measurement[]>([]);
+  const [measurements, setMeasurements] = useState<MeasurementRow[]>([]);
   const [roomInfo, setRoomInfo] = useState<RoomInfo | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -94,52 +76,65 @@ export default function RoomDetails({ roomId, onBack, isAdmin = false, onAddRoom
           capacity: r.capacity,
           occupancy: r.occupancy,
           status: r.status,
-          comfortScore: r.comfortScore,
-          light: r.light,
         });
       })
       .catch(() => setRoomInfo(null));
   }, [numericRoomId]);
 
-  const latest = useMemo(() => measurements[0] ?? null, [measurements]);
+  /** Dernière mesure par date/heure (les plus récentes en tête côté API ; on garde un max explicite). */
+  const latest = useMemo(() => {
+    if (measurements.length === 0) return null;
+    return measurements.reduce((best, m) => {
+      const tb = new Date(best.timestamp).getTime();
+      const tm = new Date(m.timestamp).getTime();
+      return tm >= tb ? m : best;
+    });
+  }, [measurements]);
 
   const chartData = useMemo(() => {
-    const reversed = [...measurements].reverse();
-    return reversed.map((m) => {
+    const chronological = [...measurements].reverse();
+    return chronological.map((m) => {
       const d = new Date(m.timestamp);
       const time = `${d.getHours().toString().padStart(2, '0')}:${d.getMinutes().toString().padStart(2, '0')}`;
       return {
         time,
-        temperature: m.temperature,
-        humidity: m.humidity,
-        co2: m.co2,
-        noise: m.noise,
-        light: m.light,
+        temperature: m.temperature ?? undefined,
+        humidity: m.humidity ?? undefined,
+        co2: m.co2 ?? undefined,
+        noise: m.noise ?? undefined,
+        light: m.light ?? undefined,
       };
     });
   }, [measurements]);
 
-  const temperatureChart = chartData.length > 0 ? chartData : fallbackChartPoint(22.5, 2).map((d) => ({ ...d, temperature: d.value }));
-  const co2Chart = chartData.length > 0 ? chartData : fallbackChartPoint(580, 200).map((d) => ({ ...d, co2: d.value }));
-  const noiseChart = chartData.length > 0 ? chartData : fallbackChartPoint(42, 15).map((d) => ({ ...d, noise: d.value }));
-  const lightChart = chartData.length > 0 ? chartData : fallbackChartPoint(450, 100).map((d) => ({ ...d, light: d.value }));
-  const occupancyChart = chartData.length > 0 ? chartData : fallbackChartPoint(0, 1).map((d) => ({ ...d, occupancy: d.value }));
+  const hasChartData = chartData.length > 0;
 
-  const room = {
-    id: roomId || 'room-1',
-    name: roomInfo?.name || 'Room',
-    status: roomInfo?.status === 'busy' ? 'occupied' : 'available',
-    occupancy: roomInfo?.occupancy ?? 0,
-    capacity: roomInfo?.capacity ?? 0,
-    comfortScore: roomInfo?.comfortScore ?? 92,
-    temperature: latest?.temperature ?? 22.5,
-    humidity: latest?.humidity ?? 45,
-    co2: latest?.co2 ?? 580,
-    noise: latest?.noise ?? 42,
-    light: roomInfo?.light ?? latest?.light ?? 450,
-  };
+  const roomMeta = useMemo(
+    () => ({
+      name: roomInfo?.name || 'Room',
+      status: roomInfo?.status === 'busy' ? ('occupied' as const) : ('available' as const),
+      occupancy: roomInfo?.occupancy ?? 0,
+      capacity: roomInfo?.capacity ?? 0,
+    }),
+    [roomInfo],
+  );
+
+  const displayComfortScore = useMemo(
+    () =>
+      computeComfortScoreFromSensors({
+        temperature: latest?.temperature,
+        humidity: latest?.humidity,
+        co2: latest?.co2,
+        noise: latest?.noise,
+        light: latest?.light,
+      }),
+    [latest],
+  );
 
   const clampLux = useCallback((v: number) => Math.min(LUX_MAX, Math.max(LUX_MIN, Math.round(v))), []);
+
+  const sliderLightLux =
+    latest?.light != null && Number.isFinite(latest.light) ? clampLux(latest.light) : LUX_MIN;
 
   const commitLightFromSlider = useCallback(
     async (el: HTMLInputElement) => {
@@ -158,10 +153,10 @@ export default function RoomDetails({ roomId, onBack, isAdmin = false, onAddRoom
             capacity: r.capacity,
             occupancy: r.occupancy,
             status: r.status,
-            comfortScore: r.comfortScore,
-            light: r.light,
           });
         }
+        const rows = await listMeasurements(numericRoomId);
+        setMeasurements(rows);
       } catch {
         setLightError('Enregistrement impossible. Réessayez.');
       } finally {
@@ -173,63 +168,88 @@ export default function RoomDetails({ roomId, onBack, isAdmin = false, onAddRoom
 
   const aiInsights = useMemo(() => {
     const messages: { title: string; text: string; tone: 'blue' | 'purple' | 'green' }[] = [];
+    const name = roomMeta.name;
 
-    if (room.co2 > 650) {
-      messages.push({
-        title: 'Air Quality Alert',
-        text: `${room.name}: CO₂ at ${Math.round(room.co2)} ppm. Increasing ventilation to keep focus and comfort at optimal levels.`,
-        tone: 'blue',
-      });
-    } else {
-      messages.push({
-        title: 'Air Quality Stable',
-        text: `${room.name}: CO₂ is under control (${Math.round(room.co2)} ppm). Ventilation remains in efficient mode.`,
-        tone: 'blue',
-      });
+    if (!latest) {
+      return [
+        {
+          title: 'No measurements yet',
+          text: `${name}: Charts and live KPIs use the latest saved point by date and time. Add measurements from room updates or admin capture.`,
+          tone: 'blue' as const,
+        },
+      ];
     }
 
-    if (room.temperature > 23) {
-      messages.push({
-        title: 'Cooling Optimization',
-        text: `${room.name}: Temperature at ${room.temperature.toFixed(1)}°C. Targeting 22°C for better comfort/energy balance.`,
-        tone: 'purple',
-      });
-    } else if (room.temperature < 21) {
-      messages.push({
-        title: 'Heating Optimization',
-        text: `${room.name}: Temperature at ${room.temperature.toFixed(1)}°C. Slightly increasing HVAC output for comfort.`,
-        tone: 'purple',
-      });
-    } else {
-      messages.push({
-        title: 'Thermal Balance',
-        text: `${room.name}: Temperature is in the comfort band (${room.temperature.toFixed(1)}°C). Keeping current settings.`,
-        tone: 'purple',
-      });
+    if (latest.co2 != null) {
+      if (latest.co2 > 650) {
+        messages.push({
+          title: 'Air Quality Alert',
+          text: `${name}: CO₂ at ${Math.round(latest.co2)} ppm. Increasing ventilation to keep focus and comfort at optimal levels.`,
+          tone: 'blue',
+        });
+      } else {
+        messages.push({
+          title: 'Air Quality Stable',
+          text: `${name}: CO₂ is under control (${Math.round(latest.co2)} ppm). Ventilation remains in efficient mode.`,
+          tone: 'blue',
+        });
+      }
     }
 
-    if (room.light > 520) {
+    if (latest.temperature != null) {
+      if (latest.temperature > 23) {
+        messages.push({
+          title: 'Cooling Optimization',
+          text: `${name}: Temperature at ${latest.temperature.toFixed(1)}°C. Targeting 22°C for better comfort/energy balance.`,
+          tone: 'purple',
+        });
+      } else if (latest.temperature < 21) {
+        messages.push({
+          title: 'Heating Optimization',
+          text: `${name}: Temperature at ${latest.temperature.toFixed(1)}°C. Slightly increasing HVAC output for comfort.`,
+          tone: 'purple',
+        });
+      } else {
+        messages.push({
+          title: 'Thermal Balance',
+          text: `${name}: Temperature is in the comfort band (${latest.temperature.toFixed(1)}°C). Keeping current settings.`,
+          tone: 'purple',
+        });
+      }
+    }
+
+    if (latest.light != null) {
+      if (latest.light > 520) {
+        messages.push({
+          title: 'Lighting Adaptation',
+          text: `${name}: High light intensity (${Math.round(latest.light)} lux). Dimming fixtures to reduce glare and save energy.`,
+          tone: 'green',
+        });
+      } else if (latest.light < 350) {
+        messages.push({
+          title: 'Lighting Boost',
+          text: `${name}: Low light level (${Math.round(latest.light)} lux). Increasing brightness for visual comfort.`,
+          tone: 'green',
+        });
+      } else {
+        messages.push({
+          title: 'Lighting Stable',
+          text: `${name}: Lighting is optimal (${Math.round(latest.light)} lux). No correction required.`,
+          tone: 'green',
+        });
+      }
+    }
+
+    if (messages.length === 0) {
       messages.push({
-        title: 'Lighting Adaptation',
-        text: `${room.name}: High light intensity (${Math.round(room.light)} lux). Dimming fixtures to reduce glare and save energy.`,
-        tone: 'green',
-      });
-    } else if (room.light < 350) {
-      messages.push({
-        title: 'Lighting Boost',
-        text: `${room.name}: Low light level (${Math.round(room.light)} lux). Increasing brightness for visual comfort.`,
-        tone: 'green',
-      });
-    } else {
-      messages.push({
-        title: 'Lighting Stable',
-        text: `${room.name}: Lighting is optimal (${Math.round(room.light)} lux). No correction required.`,
-        tone: 'green',
+        title: 'Sensor data',
+        text: `${name}: Latest record has no numeric values for the assistant yet (e.g. light-only history).`,
+        tone: 'blue',
       });
     }
 
     return messages.slice(0, 3);
-  }, [room.name, room.co2, room.temperature, room.light]);
+  }, [latest, roomMeta.name]);
 
   const getSensorStatus = (value: number, thresholds: { good: number; warning: number }) => {
     if (value <= thresholds.good) return { color: 'emerald', label: 'Good' };
@@ -249,20 +269,20 @@ export default function RoomDetails({ roomId, onBack, isAdmin = false, onAddRoom
             <ArrowLeft className="w-5 h-5 text-gray-600" />
           </button>
           <div className="flex-1">
-            <h2 className="text-2xl font-bold text-gray-900">{room.name}</h2>
+            <h2 className="text-2xl font-bold text-gray-900">{roomMeta.name}</h2>
             <div className="flex items-center space-x-4 mt-1">
               <div className="flex items-center space-x-2">
-                <div className={`w-2 h-2 rounded-full ${room.status === 'occupied' ? 'bg-blue-500' : 'bg-emerald-500'}`}></div>
-                <span className="text-sm text-gray-600 capitalize">{room.status}</span>
+                <div className={`w-2 h-2 rounded-full ${roomMeta.status === 'occupied' ? 'bg-blue-500' : 'bg-emerald-500'}`}></div>
+                <span className="text-sm text-gray-600 capitalize">{roomMeta.status}</span>
               </div>
               <div className="flex items-center space-x-2">
                 <Users className="w-4 h-4 text-gray-500" />
                 <span className="text-sm text-gray-600">
-                  {room.occupancy}/{room.capacity} people
+                  {roomMeta.occupancy}/{roomMeta.capacity} people
                 </span>
               </div>
               <div className="px-3 py-1 bg-emerald-50 text-emerald-600 rounded-full text-sm font-medium border border-emerald-200">
-                Comfort: {room.comfortScore}%
+                Comfort: {displayComfortScore ?? 0}%
               </div>
             </div>
           </div>
@@ -297,15 +317,31 @@ export default function RoomDetails({ roomId, onBack, isAdmin = false, onAddRoom
 
       {/* Live Sensor Metrics */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4">
-        {/* Temperature */}
+        {/* Temperature — dernière mesure horodatée */}
         <div className="bg-white rounded-2xl p-6 shadow-lg border border-gray-100">
           <div className="flex items-center justify-between mb-4">
             <div className="w-12 h-12 bg-gradient-to-br from-orange-100 to-orange-200 rounded-xl flex items-center justify-center">
               <Thermometer className="w-6 h-6 text-orange-600" />
             </div>
-            <span className="px-2 py-1 bg-emerald-50 text-emerald-600 text-xs font-medium rounded-lg">Good</span>
+            {latest?.temperature != null ? (
+              <span
+                className={`px-2 py-1 text-xs font-medium rounded-lg ${
+                  getSensorStatus(latest.temperature, { good: 22, warning: 24 }).color === 'emerald'
+                    ? 'bg-emerald-50 text-emerald-600'
+                    : getSensorStatus(latest.temperature, { good: 22, warning: 24 }).color === 'amber'
+                      ? 'bg-amber-50 text-amber-600'
+                      : 'bg-red-50 text-red-600'
+                }`}
+              >
+                {getSensorStatus(latest.temperature, { good: 22, warning: 24 }).label}
+              </span>
+            ) : (
+              <span className="px-2 py-1 bg-gray-100 text-gray-500 text-xs font-medium rounded-lg">--</span>
+            )}
           </div>
-          <div className="text-3xl font-bold text-gray-900 mb-1">{room.temperature}°C</div>
+          <div className="text-3xl font-bold text-gray-900 mb-1 tabular-nums">
+            {latest?.temperature != null ? `${latest.temperature.toFixed(1)}°C` : '--'}
+          </div>
           <div className="text-sm text-gray-500">Temperature</div>
         </div>
 
@@ -315,9 +351,25 @@ export default function RoomDetails({ roomId, onBack, isAdmin = false, onAddRoom
             <div className="w-12 h-12 bg-gradient-to-br from-cyan-100 to-cyan-200 rounded-xl flex items-center justify-center">
               <Droplets className="w-6 h-6 text-cyan-600" />
             </div>
-            <span className="px-2 py-1 bg-emerald-50 text-emerald-600 text-xs font-medium rounded-lg">Good</span>
+            {latest?.humidity != null ? (
+              <span
+                className={`px-2 py-1 text-xs font-medium rounded-lg ${
+                  getSensorStatus(latest.humidity, { good: 45, warning: 60 }).color === 'emerald'
+                    ? 'bg-emerald-50 text-emerald-600'
+                    : getSensorStatus(latest.humidity, { good: 45, warning: 60 }).color === 'amber'
+                      ? 'bg-amber-50 text-amber-600'
+                      : 'bg-red-50 text-red-600'
+                }`}
+              >
+                {getSensorStatus(latest.humidity, { good: 45, warning: 60 }).label}
+              </span>
+            ) : (
+              <span className="px-2 py-1 bg-gray-100 text-gray-500 text-xs font-medium rounded-lg">--</span>
+            )}
           </div>
-          <div className="text-3xl font-bold text-gray-900 mb-1">{room.humidity}%</div>
+          <div className="text-3xl font-bold text-gray-900 mb-1 tabular-nums">
+            {latest?.humidity != null ? `${Math.round(latest.humidity)}%` : '--'}
+          </div>
           <div className="text-sm text-gray-500">Humidity</div>
         </div>
 
@@ -327,9 +379,25 @@ export default function RoomDetails({ roomId, onBack, isAdmin = false, onAddRoom
             <div className="w-12 h-12 bg-gradient-to-br from-blue-100 to-blue-200 rounded-xl flex items-center justify-center">
               <Wind className="w-6 h-6 text-blue-600" />
             </div>
-            <span className="px-2 py-1 bg-emerald-50 text-emerald-600 text-xs font-medium rounded-lg">Good</span>
+            {latest?.co2 != null ? (
+              <span
+                className={`px-2 py-1 text-xs font-medium rounded-lg ${
+                  getSensorStatus(latest.co2, { good: 500, warning: 800 }).color === 'emerald'
+                    ? 'bg-emerald-50 text-emerald-600'
+                    : getSensorStatus(latest.co2, { good: 500, warning: 800 }).color === 'amber'
+                      ? 'bg-amber-50 text-amber-600'
+                      : 'bg-red-50 text-red-600'
+                }`}
+              >
+                {getSensorStatus(latest.co2, { good: 500, warning: 800 }).label}
+              </span>
+            ) : (
+              <span className="px-2 py-1 bg-gray-100 text-gray-500 text-xs font-medium rounded-lg">--</span>
+            )}
           </div>
-          <div className="text-3xl font-bold text-gray-900 mb-1">{room.co2}</div>
+          <div className="text-3xl font-bold text-gray-900 mb-1 tabular-nums">
+            {latest?.co2 != null ? Math.round(latest.co2) : '--'}
+          </div>
           <div className="text-sm text-gray-500">CO₂ (ppm)</div>
         </div>
 
@@ -339,9 +407,25 @@ export default function RoomDetails({ roomId, onBack, isAdmin = false, onAddRoom
             <div className="w-12 h-12 bg-gradient-to-br from-purple-100 to-purple-200 rounded-xl flex items-center justify-center">
               <Volume2 className="w-6 h-6 text-purple-600" />
             </div>
-            <span className="px-2 py-1 bg-emerald-50 text-emerald-600 text-xs font-medium rounded-lg">Quiet</span>
+            {latest?.noise != null ? (
+              <span
+                className={`px-2 py-1 text-xs font-medium rounded-lg ${
+                  getSensorStatus(latest.noise, { good: 45, warning: 55 }).color === 'emerald'
+                    ? 'bg-emerald-50 text-emerald-600'
+                    : getSensorStatus(latest.noise, { good: 45, warning: 55 }).color === 'amber'
+                      ? 'bg-amber-50 text-amber-600'
+                      : 'bg-red-50 text-red-600'
+                }`}
+              >
+                {getSensorStatus(latest.noise, { good: 45, warning: 55 }).label}
+              </span>
+            ) : (
+              <span className="px-2 py-1 bg-gray-100 text-gray-500 text-xs font-medium rounded-lg">--</span>
+            )}
           </div>
-          <div className="text-3xl font-bold text-gray-900 mb-1">{room.noise}</div>
+          <div className="text-3xl font-bold text-gray-900 mb-1 tabular-nums">
+            {latest?.noise != null ? Math.round(latest.noise) : '--'}
+          </div>
           <div className="text-sm text-gray-500">Noise (dB)</div>
         </div>
 
@@ -351,9 +435,25 @@ export default function RoomDetails({ roomId, onBack, isAdmin = false, onAddRoom
             <div className="w-12 h-12 bg-gradient-to-br from-amber-100 to-amber-200 rounded-xl flex items-center justify-center">
               <Sun className="w-6 h-6 text-amber-600" aria-hidden />
             </div>
-            <span className="px-2 py-1 bg-emerald-50 text-emerald-600 text-xs font-medium rounded-lg">Optimal</span>
+            {latest?.light != null ? (
+              <span
+                className={`px-2 py-1 text-xs font-medium rounded-lg ${
+                  getSensorStatus(latest.light, { good: 400, warning: 550 }).color === 'emerald'
+                    ? 'bg-emerald-50 text-emerald-600'
+                    : getSensorStatus(latest.light, { good: 400, warning: 550 }).color === 'amber'
+                      ? 'bg-amber-50 text-amber-600'
+                      : 'bg-red-50 text-red-600'
+                }`}
+              >
+                {getSensorStatus(latest.light, { good: 400, warning: 550 }).label}
+              </span>
+            ) : (
+              <span className="px-2 py-1 bg-gray-100 text-gray-500 text-xs font-medium rounded-lg">--</span>
+            )}
           </div>
-          <div className="text-3xl font-bold text-gray-900 mb-1 tabular-nums">{Math.round(room.light)}</div>
+          <div className="text-3xl font-bold text-gray-900 mb-1 tabular-nums">
+            {latest?.light != null ? Math.round(latest.light) : '--'}
+          </div>
           <div className="text-sm text-gray-500">Light (lux)</div>
           {isAdmin && numericRoomId ? (
             <div className="mt-4 pt-4 border-t border-gray-100">
@@ -366,9 +466,7 @@ export default function RoomDetails({ roomId, onBack, isAdmin = false, onAddRoom
                 min={LUX_MIN}
                 max={LUX_MAX}
                 step={LUX_STEP}
-                value={
-                  dragLightLux !== null ? dragLightLux : clampLux(room.light)
-                }
+                value={dragLightLux !== null ? dragLightLux : sliderLightLux}
                 disabled={lightSaving}
                 onChange={(e) => setDragLightLux(Number(e.target.value))}
                 onPointerUp={(e) => void commitLightFromSlider(e.currentTarget)}
@@ -395,63 +493,77 @@ export default function RoomDetails({ roomId, onBack, isAdmin = false, onAddRoom
         <div className="text-center py-8 text-gray-500">Loading measurements…</div>
       )}
       {error && (
-        <div className="rounded-xl bg-amber-50 border border-amber-200 text-amber-800 px-4 py-2 text-sm">
-          {error} — charts show fallback data.
-        </div>
+        <div className="rounded-xl bg-amber-50 border border-amber-200 text-amber-800 px-4 py-2 text-sm">{error}</div>
       )}
 
-      {/* Historical Charts (from API or fallback) */}
+      {/* Historique mesures (affichage ici uniquement) */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         <div className="bg-white rounded-2xl p-6 shadow-lg border border-gray-100">
           <h3 className="font-semibold text-gray-900 mb-4">Temperature (24h)</h3>
-          <ResponsiveContainer width="100%" height={200}>
-            <LineChart data={temperatureChart}>
-              <CartesianGrid strokeDasharray="3 3" stroke="#f3f4f6" />
-              <XAxis dataKey="time" stroke="#9ca3af" fontSize={12} />
-              <YAxis stroke="#9ca3af" fontSize={12} domain={[20, 25]} />
-              <Tooltip />
-              <Line type="monotone" dataKey="temperature" stroke="#f97316" strokeWidth={2} dot={false} />
-            </LineChart>
-          </ResponsiveContainer>
+          {hasChartData ? (
+            <ResponsiveContainer width="100%" height={200}>
+              <LineChart data={chartData}>
+                <CartesianGrid strokeDasharray="3 3" stroke="#f3f4f6" />
+                <XAxis dataKey="time" stroke="#9ca3af" fontSize={12} />
+                <YAxis stroke="#9ca3af" fontSize={12} domain={['auto', 'auto']} />
+                <Tooltip />
+                <Line type="monotone" dataKey="temperature" stroke="#f97316" strokeWidth={2} dot={false} />
+              </LineChart>
+            </ResponsiveContainer>
+          ) : (
+            <div className="flex h-[200px] items-center justify-center text-sm text-gray-400">--</div>
+          )}
         </div>
 
         <div className="bg-white rounded-2xl p-6 shadow-lg border border-gray-100">
           <h3 className="font-semibold text-gray-900 mb-4">CO₂ Level (24h)</h3>
-          <ResponsiveContainer width="100%" height={200}>
-            <LineChart data={co2Chart}>
-              <CartesianGrid strokeDasharray="3 3" stroke="#f3f4f6" />
-              <XAxis dataKey="time" stroke="#9ca3af" fontSize={12} />
-              <YAxis stroke="#9ca3af" fontSize={12} domain={[300, 800]} />
-              <Tooltip />
-              <Line type="monotone" dataKey="co2" stroke="#3b82f6" strokeWidth={2} dot={false} />
-            </LineChart>
-          </ResponsiveContainer>
+          {hasChartData ? (
+            <ResponsiveContainer width="100%" height={200}>
+              <LineChart data={chartData}>
+                <CartesianGrid strokeDasharray="3 3" stroke="#f3f4f6" />
+                <XAxis dataKey="time" stroke="#9ca3af" fontSize={12} />
+                <YAxis stroke="#9ca3af" fontSize={12} domain={['auto', 'auto']} />
+                <Tooltip />
+                <Line type="monotone" dataKey="co2" stroke="#3b82f6" strokeWidth={2} dot={false} />
+              </LineChart>
+            </ResponsiveContainer>
+          ) : (
+            <div className="flex h-[200px] items-center justify-center text-sm text-gray-400">--</div>
+          )}
         </div>
 
         <div className="bg-white rounded-2xl p-6 shadow-lg border border-gray-100">
           <h3 className="font-semibold text-gray-900 mb-4">Noise Level (24h)</h3>
-          <ResponsiveContainer width="100%" height={200}>
-            <LineChart data={noiseChart}>
-              <CartesianGrid strokeDasharray="3 3" stroke="#f3f4f6" />
-              <XAxis dataKey="time" stroke="#9ca3af" fontSize={12} />
-              <YAxis stroke="#9ca3af" fontSize={12} domain={[20, 60]} />
-              <Tooltip />
-              <Line type="monotone" dataKey="noise" stroke="#a855f7" strokeWidth={2} dot={false} />
-            </LineChart>
-          </ResponsiveContainer>
+          {hasChartData ? (
+            <ResponsiveContainer width="100%" height={200}>
+              <LineChart data={chartData}>
+                <CartesianGrid strokeDasharray="3 3" stroke="#f3f4f6" />
+                <XAxis dataKey="time" stroke="#9ca3af" fontSize={12} />
+                <YAxis stroke="#9ca3af" fontSize={12} domain={['auto', 'auto']} />
+                <Tooltip />
+                <Line type="monotone" dataKey="noise" stroke="#a855f7" strokeWidth={2} dot={false} />
+              </LineChart>
+            </ResponsiveContainer>
+          ) : (
+            <div className="flex h-[200px] items-center justify-center text-sm text-gray-400">--</div>
+          )}
         </div>
 
         <div className="bg-white rounded-2xl p-6 shadow-lg border border-gray-100">
           <h3 className="font-semibold text-gray-900 mb-4">Light Intensity (24h)</h3>
-          <ResponsiveContainer width="100%" height={200}>
-            <LineChart data={lightChart}>
-              <CartesianGrid strokeDasharray="3 3" stroke="#f3f4f6" />
-              <XAxis dataKey="time" stroke="#9ca3af" fontSize={12} />
-              <YAxis stroke="#9ca3af" fontSize={12} domain={[300, 600]} />
-              <Tooltip />
-              <Line type="monotone" dataKey="light" stroke="#f59e0b" strokeWidth={2} dot={false} />
-            </LineChart>
-          </ResponsiveContainer>
+          {hasChartData ? (
+            <ResponsiveContainer width="100%" height={200}>
+              <LineChart data={chartData}>
+                <CartesianGrid strokeDasharray="3 3" stroke="#f3f4f6" />
+                <XAxis dataKey="time" stroke="#9ca3af" fontSize={12} />
+                <YAxis stroke="#9ca3af" fontSize={12} domain={['auto', 'auto']} />
+                <Tooltip />
+                <Line type="monotone" dataKey="light" stroke="#f59e0b" strokeWidth={2} dot={false} />
+              </LineChart>
+            </ResponsiveContainer>
+          ) : (
+            <div className="flex h-[200px] items-center justify-center text-sm text-gray-400">--</div>
+          )}
         </div>
       </div>
 

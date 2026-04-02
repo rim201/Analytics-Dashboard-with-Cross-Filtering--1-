@@ -8,33 +8,21 @@ interface MainDashboardProps {
   onNavigate: (page: PageType) => void;
 }
 
-const fallbackTemperatureData = [
-  { time: '00:00', value: 21.5 },
-  { time: '04:00', value: 21.2 },
-  { time: '08:00', value: 22.1 },
-  { time: '12:00', value: 23.5 },
-  { time: '16:00', value: 22.8 },
-  { time: '20:00', value: 21.9 },
-];
-
-const fallbackCo2Data = [
-  { time: '00:00', value: 420 },
-  { time: '04:00', value: 410 },
-  { time: '08:00', value: 580 },
-  { time: '12:00', value: 720 },
-  { time: '16:00', value: 650 },
-  { time: '20:00', value: 480 },
-];
+function EmptyChartArea() {
+  return <div className="h-[240px] min-h-[240px]" aria-hidden />;
+}
 
 export default function MainDashboard({ onNavigate }: MainDashboardProps) {
   const [summary, setSummary] = useState({
-    comfortScore: 92,
-    temperature: 22.5,
-    co2: 580,
-    noise: 42,
-    light: 450,
-    temperatureData: fallbackTemperatureData,
-    co2Data: fallbackCo2Data,
+    comfortScore: 0,
+    temperature: 0,
+    co2: 0,
+    noise: 0,
+    light: 0,
+    temperatureData: [] as { time: string; value: number }[],
+    co2Data: [] as { time: string; value: number }[],
+    lightData: [] as { time: string; value: number }[],
+    noiseData: [] as { time: string; value: number }[],
     roomOverview: { total: 0, available: 0, occupied: 0, maintenance: 0 },
   });
 
@@ -42,16 +30,15 @@ export default function MainDashboard({ onNavigate }: MainDashboardProps) {
     fetchDashboardSummary()
       .then((data) => {
         setSummary({
-          comfortScore: data.comfortScore || 92,
-          temperature: data.temperature || 22.5,
-          co2: data.co2 || 580,
-          noise: data.noise || 42,
-          light: data.light || 450,
-          temperatureData:
-            data.temperatureData && data.temperatureData.length > 0
-              ? data.temperatureData
-              : fallbackTemperatureData,
-          co2Data: data.co2Data && data.co2Data.length > 0 ? data.co2Data : fallbackCo2Data,
+          comfortScore: data.comfortScore ?? 0,
+          temperature: data.temperature ?? 0,
+          co2: data.co2 ?? 0,
+          noise: data.noise ?? 0,
+          light: data.light ?? 0,
+          temperatureData: data.temperatureData ?? [],
+          co2Data: data.co2Data ?? [],
+          lightData: data.lightData ?? [],
+          noiseData: data.noiseData ?? [],
           roomOverview: data.roomOverview || { total: 0, available: 0, occupied: 0, maintenance: 0 },
         });
       })
@@ -76,6 +63,7 @@ export default function MainDashboard({ onNavigate }: MainDashboardProps) {
             </div>
             <div className="text-3xl font-bold">{summary.comfortScore}%</div>
             <div className="text-sm opacity-90">Comfort Score</div>
+            <div className="text-xs opacity-75 mt-1">24h · all rooms</div>
           </div>
         </div>
 
@@ -92,6 +80,7 @@ export default function MainDashboard({ onNavigate }: MainDashboardProps) {
           </div>
           <div className="text-3xl font-bold text-gray-900">{summary.temperature}°C</div>
           <div className="text-sm text-gray-500">Temperature</div>
+          <div className="text-xs text-gray-400 mt-1">24h average · all rooms</div>
         </div>
 
         {/* CO2 Level */}
@@ -107,6 +96,7 @@ export default function MainDashboard({ onNavigate }: MainDashboardProps) {
           </div>
           <div className="text-3xl font-bold text-gray-900">{summary.co2} ppm</div>
           <div className="text-sm text-gray-500">CO₂ Level</div>
+          <div className="text-xs text-gray-400 mt-1">24h average · all rooms</div>
         </div>
 
         {/* Noise Level */}
@@ -122,6 +112,7 @@ export default function MainDashboard({ onNavigate }: MainDashboardProps) {
           </div>
           <div className="text-3xl font-bold text-gray-900">{summary.noise} dB</div>
           <div className="text-sm text-gray-500">Noise Level</div>
+          <div className="text-xs text-gray-400 mt-1">24h average · all rooms</div>
         </div>
 
         {/* Light Intensity */}
@@ -137,6 +128,7 @@ export default function MainDashboard({ onNavigate }: MainDashboardProps) {
           </div>
           <div className="text-3xl font-bold text-gray-900">{summary.light} lux</div>
           <div className="text-sm text-gray-500">Light Intensity</div>
+          <div className="text-xs text-gray-400 mt-1">24h average · all rooms</div>
         </div>
       </div>
 
@@ -145,41 +137,97 @@ export default function MainDashboard({ onNavigate }: MainDashboardProps) {
         {/* Temperature Trend */}
         <div className="bg-white rounded-2xl p-6 shadow-lg border border-gray-100">
           <div className="mb-6">
-            <h3 className="text-lg font-semibold text-gray-900">Temperature Trend</h3>
-            <p className="text-sm text-gray-500">Last 24 hours</p>
+            <h3 className="text-lg font-semibold text-gray-900">Temperature trend</h3>
+            <p className="text-sm text-gray-500">Last 24 hours · all rooms (hourly average)</p>
           </div>
-          <ResponsiveContainer width="100%" height={240}>
-            <AreaChart data={summary.temperatureData}>
-              <defs>
-                <linearGradient id="tempGradient" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="5%" stopColor="#f97316" stopOpacity={0.3} />
-                  <stop offset="95%" stopColor="#f97316" stopOpacity={0} />
-                </linearGradient>
-              </defs>
-              <CartesianGrid strokeDasharray="3 3" stroke="#f3f4f6" />
-              <XAxis dataKey="time" stroke="#9ca3af" fontSize={12} />
-              <YAxis stroke="#9ca3af" fontSize={12} domain={[20, 25]} />
-              <Tooltip />
-              <Area type="monotone" dataKey="value" stroke="#f97316" strokeWidth={2} fill="url(#tempGradient)" />
-            </AreaChart>
-          </ResponsiveContainer>
+          {summary.temperatureData.length > 0 ? (
+            <ResponsiveContainer width="100%" height={240}>
+              <AreaChart data={summary.temperatureData}>
+                <defs>
+                  <linearGradient id="dash-temp-grad" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="5%" stopColor="#f97316" stopOpacity={0.3} />
+                    <stop offset="95%" stopColor="#f97316" stopOpacity={0} />
+                  </linearGradient>
+                </defs>
+                <CartesianGrid strokeDasharray="3 3" stroke="#f3f4f6" />
+                <XAxis dataKey="time" stroke="#9ca3af" fontSize={12} />
+                <YAxis stroke="#9ca3af" fontSize={12} domain={['auto', 'auto']} />
+                <Tooltip />
+                <Area type="monotone" dataKey="value" stroke="#f97316" strokeWidth={2} fill="url(#dash-temp-grad)" />
+              </AreaChart>
+            </ResponsiveContainer>
+          ) : (
+            <EmptyChartArea />
+          )}
         </div>
 
         {/* CO2 Trend */}
         <div className="bg-white rounded-2xl p-6 shadow-lg border border-gray-100">
           <div className="mb-6">
-            <h3 className="text-lg font-semibold text-gray-900">CO₂ Level Trend</h3>
-            <p className="text-sm text-gray-500">Last 24 hours</p>
+            <h3 className="text-lg font-semibold text-gray-900">CO₂ level trend</h3>
+            <p className="text-sm text-gray-500">Last 24 hours · all rooms (hourly average)</p>
           </div>
-          <ResponsiveContainer width="100%" height={240}>
-            <LineChart data={summary.co2Data}>
-              <CartesianGrid strokeDasharray="3 3" stroke="#f3f4f6" />
-              <XAxis dataKey="time" stroke="#9ca3af" fontSize={12} />
-              <YAxis stroke="#9ca3af" fontSize={12} domain={[300, 800]} />
-              <Tooltip />
-              <Line type="monotone" dataKey="value" stroke="#3b82f6" strokeWidth={2} dot={{ fill: '#3b82f6', r: 4 }} />
-            </LineChart>
-          </ResponsiveContainer>
+          {summary.co2Data.length > 0 ? (
+            <ResponsiveContainer width="100%" height={240}>
+              <LineChart data={summary.co2Data}>
+                <CartesianGrid strokeDasharray="3 3" stroke="#f3f4f6" />
+                <XAxis dataKey="time" stroke="#9ca3af" fontSize={12} />
+                <YAxis stroke="#9ca3af" fontSize={12} domain={['auto', 'auto']} />
+                <Tooltip />
+                <Line type="monotone" dataKey="value" stroke="#3b82f6" strokeWidth={2} dot={{ fill: '#3b82f6', r: 4 }} />
+              </LineChart>
+            </ResponsiveContainer>
+          ) : (
+            <EmptyChartArea />
+          )}
+        </div>
+
+        {/* Light trend (24h · toutes salles) */}
+        <div className="bg-white rounded-2xl p-6 shadow-lg border border-gray-100">
+          <div className="mb-6">
+            <h3 className="text-lg font-semibold text-gray-900">Light intensity trend</h3>
+            <p className="text-sm text-gray-500">Last 24 hours · all rooms (hourly average)</p>
+          </div>
+          {summary.lightData.length > 0 ? (
+            <ResponsiveContainer width="100%" height={240}>
+              <AreaChart data={summary.lightData}>
+                <defs>
+                  <linearGradient id="dash-light-grad" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="5%" stopColor="#f59e0b" stopOpacity={0.35} />
+                    <stop offset="95%" stopColor="#f59e0b" stopOpacity={0} />
+                  </linearGradient>
+                </defs>
+                <CartesianGrid strokeDasharray="3 3" stroke="#f3f4f6" />
+                <XAxis dataKey="time" stroke="#9ca3af" fontSize={12} />
+                <YAxis stroke="#9ca3af" fontSize={12} domain={['auto', 'auto']} unit=" lx" />
+                <Tooltip />
+                <Area type="monotone" dataKey="value" stroke="#f59e0b" strokeWidth={2} fill="url(#dash-light-grad)" />
+              </AreaChart>
+            </ResponsiveContainer>
+          ) : (
+            <EmptyChartArea />
+          )}
+        </div>
+
+        {/* Noise trend */}
+        <div className="bg-white rounded-2xl p-6 shadow-lg border border-gray-100">
+          <div className="mb-6">
+            <h3 className="text-lg font-semibold text-gray-900">Noise level trend</h3>
+            <p className="text-sm text-gray-500">Last 24 hours · all rooms (hourly average)</p>
+          </div>
+          {summary.noiseData.length > 0 ? (
+            <ResponsiveContainer width="100%" height={240}>
+              <LineChart data={summary.noiseData}>
+                <CartesianGrid strokeDasharray="3 3" stroke="#f3f4f6" />
+                <XAxis dataKey="time" stroke="#9ca3af" fontSize={12} />
+                <YAxis stroke="#9ca3af" fontSize={12} domain={['auto', 'auto']} unit=" dB" />
+                <Tooltip />
+                <Line type="monotone" dataKey="value" stroke="#a855f7" strokeWidth={2} dot={{ fill: '#a855f7', r: 3 }} />
+              </LineChart>
+            </ResponsiveContainer>
+          ) : (
+            <EmptyChartArea />
+          )}
         </div>
       </div>
 

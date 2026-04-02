@@ -1,7 +1,6 @@
 import {
   addDoc,
   collection,
-  collectionGroup,
   deleteDoc,
   deleteField,
   doc,
@@ -10,6 +9,7 @@ import {
   onSnapshot,
   orderBy,
   query,
+  setDoc,
   Timestamp,
   updateDoc,
   where,
@@ -19,30 +19,78 @@ import {
 } from 'firebase/firestore';
 import { db } from '../firebase';
 import type { AppRole } from './auth';
+import { computeComfortScoreFromSensors } from './comfortScore';
 
 // —— Types (alignés avec l’ancienne API Django) —— //
 
+/** Document `rooms` : métadonnées uniquement — capteurs dans `rooms/{id}/measurements`. */
 export type RoomRow = {
   id: string;
   name: string;
   capacity: number;
   occupancy: number;
   status: 'available' | 'busy';
-  comfortScore: number;
-  temperature: number;
-  co2: number;
-  noise: number;
-  light: number;
 };
 
 export type MeasurementRow = {
   timestamp: string;
-  temperature: number;
-  humidity: number;
-  co2: number;
-  noise: number;
-  light: number;
+  temperature: number | null;
+  humidity: number | null;
+  co2: number | null;
+  noise: number | null;
+  light: number | null;
 };
+
+function measurementNumericOrNull(v: unknown): number | null {
+  if (v === null || v === undefined) return null;
+  const n = Number(v);
+  return Number.isFinite(n) ? n : null;
+}
+
+function mapFirestoreDataToMeasurementRow(x: Record<string, unknown>, timestampIso: string): MeasurementRow {
+  return {
+    timestamp: timestampIso,
+    temperature: measurementNumericOrNull(x.temperature),
+    humidity: measurementNumericOrNull(x.humidity),
+    co2: measurementNumericOrNull(x.co2),
+    noise: measurementNumericOrNull(x.noise),
+    light: measurementNumericOrNull(x.light),
+  };
+}
+
+/** Longueur fixe pour que l’ordre lexicographique des IDs = ordre chronologique (comparaison rapide côté client). */
+const MEASUREMENT_DOC_ID_PAD = 16;
+
+/** ID document Firestore = temps en millisecondes (padding). Même instant : suffixe `_1`, `_2`, … */
+export function roomMeasurementDocumentId(at: Timestamp | Date): string {
+  const ms = at instanceof Timestamp ? at.toMillis() : at.getTime();
+  return ms.toString().padStart(MEASUREMENT_DOC_ID_PAD, '0');
+}
+
+/**
+ * Écrit `rooms/{roomId}/measurements/{id}` avec `id` basé sur `timestamp` (récupération directe par `doc(..., id)`).
+ * Les anciennes mesures (ID auto Firestore) restent valides ; les requêtes par champ `timestamp` sont inchangées.
+ */
+async function setRoomMeasurementDoc(
+  roomId: string,
+  timestamp: Timestamp,
+  fields: Record<string, unknown>,
+): Promise<void> {
+  const ms = timestamp.toMillis();
+  const baseId = ms.toString().padStart(MEASUREMENT_DOC_ID_PAD, '0');
+  const payload = { timestamp, ...fields };
+
+  for (let i = 0; i < 64; i++) {
+    const docId = i === 0 ? baseId : `${baseId}_${i}`;
+    const ref = doc(db, 'rooms', roomId, 'measurements', docId);
+    const existing = await getDoc(ref);
+    if (!existing.exists()) {
+      await setDoc(ref, payload);
+      return;
+    }
+  }
+  await addDoc(collection(db, 'rooms', roomId, 'measurements'), payload);
+}
 
 export type UserRecord = {
   id: string;
@@ -76,6 +124,8 @@ export type DashboardSummary = {
   light: number;
   temperatureData: { time: string; value: number }[];
   co2Data: { time: string; value: number }[];
+  lightData: { time: string; value: number }[];
+  noiseData: { time: string; value: number }[];
   roomOverview: { total: number; available: number; occupied: number; maintenance: number };
 };
 
@@ -445,11 +495,6 @@ function mapRoomDoc(d: DocumentSnapshot): RoomRow {
     capacity: Number(x.capacity ?? 0),
     occupancy: occ,
     status: occ > 0 ? 'busy' : 'available',
-    comfortScore: Number(x.comfortScore ?? 92),
-    temperature: Number(x.temperature ?? 0),
-    co2: Number(x.co2 ?? 0),
-    noise: Number(x.noise ?? 0),
-    light: Number(x.light ?? 0),
   };
 }
 
@@ -466,13 +511,173 @@ export async function listRooms(): Promise<RoomRow[]> {
   return snap.docs.map(mapRoomDoc);
 }
 
-/** Réglage cible d’éclairage (lux) pour une salle — réservé à l’UI admin. */
+/** Liste salles pour l’UI : capteurs = dernière mesure horodatée (`null` → afficher « -- »). */
+export type RoomListRow = {
+  id: string;
+  name: string;
+  capacity: number;
+  occupancy: number;
+  status: 'available' | 'busy';
+  /** Calculé depuis les capteurs de la dernière mesure ; `0` si aucune donnée. */
+  comfortScore: number;
+  temperature: number | null;
+  humidity: number | null;
+  co2: number | null;
+  noise: number | null;
+  light: number | null;
+};
+
+export async function listRoomsWithLatestMeasurements(): Promise<RoomListRow[]> {
+  const rooms = await listRooms();
+  return Promise.all(
+    rooms.map(async (r) => {
+      const m = await fetchLatestMeasurementRow(r.id);
+      const temperature = m?.temperature ?? null;
+      const humidity = m?.humidity ?? null;
+      const co2 = m?.co2 ?? null;
+      const noise = m?.noise ?? null;
+      const light = m?.light ?? null;
+      return {
+        id: r.id,
+        name: r.name,
+        capacity: r.capacity,
+        occupancy: r.occupancy,
+        status: r.status,
+        comfortScore:
+          computeComfortScoreFromSensors({
+            temperature,
+            humidity,
+            co2,
+            noise,
+            light,
+          }) ?? 0,
+        temperature,
+        humidity,
+        co2,
+        noise,
+        light,
+      };
+    }),
+  );
+}
+
+/** Dernière mesure enregistrée (avant tout nouvel enregistrement dans le même flux). */
+async function fetchLatestMeasurementRow(roomId: string): Promise<MeasurementRow | null> {
+  const snap = await getDocs(
+    query(collection(db, 'rooms', roomId, 'measurements'), orderBy('timestamp', 'desc'), limit(1)),
+  );
+  if (snap.empty) return null;
+  const d = snap.docs[0];
+  const raw = d.data();
+  const ts = raw.timestamp as Timestamp | undefined;
+  const timestampIso = ts?.toDate?.()?.toISOString?.() ?? new Date().toISOString();
+  return mapFirestoreDataToMeasurementRow(raw as Record<string, unknown>, timestampIso);
+}
+
+/** Réglage lumière (lux) : enregistré uniquement dans `measurements`, pas sur le document `rooms`. */
 export async function updateRoomLight(roomId: string, lightLux: number): Promise<void> {
   const clamped = Math.max(150, Math.min(1000, Math.round(Number(lightLux))));
-  await updateDoc(doc(db, 'rooms', roomId), {
+  const room = await getRoomById(roomId);
+  if (!room) return;
+  const prev = await fetchLatestMeasurementRow(roomId);
+  const ts = Timestamp.now();
+  if (prev) {
+    await setRoomMeasurementDoc(roomId, ts, {
+      temperature: prev.temperature,
+      humidity: prev.humidity,
+      co2: prev.co2,
+      noise: prev.noise,
+      light: clamped,
+    });
+    return;
+  }
+  // Aucune mesure existante : un seul point lumière, sans valeurs par défaut pour les autres capteurs.
+  await setRoomMeasurementDoc(roomId, ts, {
     light: clamped,
-    updatedAt: Timestamp.now(),
+    temperature: null,
+    humidity: null,
+    co2: null,
+    noise: null,
   });
+}
+
+/** Un point d’historique capteurs : date (`timestamp`) + valeurs (température, humidité, CO₂, bruit, lumière). */
+export async function appendRoomMeasurementSnapshot(
+  roomId: string,
+  values: {
+    temperature: number;
+    humidity: number;
+    co2: number;
+    noise: number;
+    light: number;
+  },
+  at: Date = new Date(),
+): Promise<void> {
+  const ts = Timestamp.fromDate(at);
+  await setRoomMeasurementDoc(roomId, ts, {
+    temperature: values.temperature,
+    humidity: values.humidity,
+    co2: values.co2,
+    noise: values.noise,
+    light: values.light,
+  });
+}
+
+/** Ajoute pour chaque salle un point reprenant la dernière mesure connue (ou champs null si aucune). */
+export async function appendCurrentSnapshotsForAllRooms(): Promise<number> {
+  const rooms = await listRooms();
+  const t = Timestamp.now();
+  let n = 0;
+  for (const r of rooms) {
+    const prev = await fetchLatestMeasurementRow(r.id);
+    await setRoomMeasurementDoc(r.id, t, {
+      temperature: prev?.temperature ?? null,
+      humidity: prev?.humidity ?? null,
+      co2: prev?.co2 ?? null,
+      noise: prev?.noise ?? null,
+      light: prev?.light ?? null,
+    });
+    n++;
+  }
+  return n;
+}
+
+/** Compte les mesures dont `timestamp` est dans [start, end] (bornes inclusives). */
+export async function countRoomMeasurementsInRange(roomId: string, start: Date, end: Date): Promise<number> {
+  if (start.getTime() > end.getTime()) return 0;
+  const q = query(
+    collection(db, 'rooms', roomId, 'measurements'),
+    where('timestamp', '>=', Timestamp.fromDate(start)),
+    where('timestamp', '<=', Timestamp.fromDate(end)),
+  );
+  const snap = await getDocs(q);
+  return snap.size;
+}
+
+/** Supprime toutes les mesures dans [start, end] pour une salle. Retourne le nombre supprimé. */
+export async function deleteRoomMeasurementsInRange(roomId: string, start: Date, end: Date): Promise<number> {
+  if (start.getTime() > end.getTime()) return 0;
+  const q = query(
+    collection(db, 'rooms', roomId, 'measurements'),
+    where('timestamp', '>=', Timestamp.fromDate(start)),
+    where('timestamp', '<=', Timestamp.fromDate(end)),
+  );
+  const snap = await getDocs(q);
+  let batch = writeBatch(db);
+  let n = 0;
+  let deleted = 0;
+  for (const d of snap.docs) {
+    batch.delete(d.ref);
+    n++;
+    deleted++;
+    if (n >= 450) {
+      await batch.commit();
+      batch = writeBatch(db);
+      n = 0;
+    }
+  }
+  if (n > 0) await batch.commit();
+  return deleted;
 }
 
 export async function createRoom(payload: {
@@ -486,12 +691,6 @@ export async function createRoom(payload: {
     name: payload.name,
     capacity: payload.capacity,
     occupancy: payload.occupancy,
-    comfortScore: 92,
-    temperature: 21 + Math.random() * 3,
-    humidity: 40 + Math.random() * 15,
-    co2: 450 + Math.random() * 250,
-    noise: 36 + Math.random() * 12,
-    light: 380 + Math.random() * 120,
     createdAt: Timestamp.now(),
   });
 
@@ -558,75 +757,164 @@ export async function listMeasurements(roomId: string): Promise<MeasurementRow[]
   return snap.docs.map((d) => {
     const x = d.data();
     const ts = x.timestamp as Timestamp | undefined;
-    return {
-      timestamp: ts?.toDate?.()?.toISOString?.() ?? new Date().toISOString(),
-      temperature: Number(x.temperature ?? 0),
-      humidity: Number(x.humidity ?? 0),
-      co2: Number(x.co2 ?? 0),
-      noise: Number(x.noise ?? 0),
-      light: Number(x.light ?? 0),
-    };
+    const timestampIso = ts?.toDate?.()?.toISOString?.() ?? new Date().toISOString();
+    return mapFirestoreDataToMeasurementRow(x as Record<string, unknown>, timestampIso);
   });
 }
 
 // —— Dashboard —— //
 
-const fallbackTemperatureData = [
-  { time: '00:00', value: 21.5 },
-  { time: '04:00', value: 21.2 },
-  { time: '08:00', value: 22.1 },
-  { time: '12:00', value: 23.5 },
-  { time: '16:00', value: 22.8 },
-  { time: '20:00', value: 21.9 },
-];
-
-const fallbackCo2Data = [
-  { time: '00:00', value: 420 },
-  { time: '04:00', value: 410 },
-  { time: '08:00', value: 580 },
-  { time: '12:00', value: 720 },
-  { time: '16:00', value: 650 },
-  { time: '20:00', value: 480 },
-];
-
 function round1(n: number) {
   return Math.round(n * 10) / 10;
 }
 
+function averageNumbers(nums: number[]): number {
+  if (nums.length === 0) return 0;
+  return round1(nums.reduce((a, b) => a + b, 0) / nums.length);
+}
+
+const DASHBOARD_24H_MS = 24 * 60 * 60 * 1000;
+const HOUR_MS = 60 * 60 * 1000;
+const DASHBOARD_MEASUREMENTS_LIMIT = 5000;
+
+type DashboardMeasRow = {
+  ms: number;
+  temperature: number | null;
+  humidity: number | null;
+  co2: number | null;
+  noise: number | null;
+  light: number | null;
+};
+
+function mapMeasurementDocToDashboardRow(x: Record<string, unknown>): DashboardMeasRow {
+  const ts = x.timestamp as Timestamp | undefined;
+  const date = ts?.toDate?.() ?? new Date(0);
+  return {
+    ms: date.getTime(),
+    temperature: measurementNumericOrNull(x.temperature),
+    humidity: measurementNumericOrNull(x.humidity),
+    co2: measurementNumericOrNull(x.co2),
+    noise: measurementNumericOrNull(x.noise),
+    light: measurementNumericOrNull(x.light),
+  };
+}
+
+/**
+ * Mesures des dernières 24 h pour toutes les salles (requêtes par sous-collection).
+ * Évite collectionGroup + index composite souvent absent ; repli : orderBy desc + filtre client.
+ */
+async function fetchMeasurementsMergedLast24h(rooms: RoomRow[], since: Date, sinceTs: Timestamp): Promise<DashboardMeasRow[]> {
+  const sinceMs = since.getTime();
+  const n = Math.max(1, rooms.length);
+  const perRoomLimit = Math.min(2000, Math.ceil(DASHBOARD_MEASUREMENTS_LIMIT / n));
+
+  const batches = await Promise.all(
+    rooms.map(async (room) => {
+      const col = collection(db, 'rooms', room.id, 'measurements');
+      try {
+        const qRange = query(
+          col,
+          where('timestamp', '>=', sinceTs),
+          orderBy('timestamp', 'asc'),
+          limit(perRoomLimit),
+        );
+        const snap = await getDocs(qRange);
+        return snap.docs.map((d) => mapMeasurementDocToDashboardRow(d.data() as Record<string, unknown>));
+      } catch {
+        try {
+          const qDesc = query(col, orderBy('timestamp', 'desc'), limit(perRoomLimit));
+          const snap = await getDocs(qDesc);
+          return snap.docs
+            .map((d) => mapMeasurementDocToDashboardRow(d.data() as Record<string, unknown>))
+            .filter((r) => r.ms >= sinceMs);
+        } catch {
+          return [];
+        }
+      }
+    }),
+  );
+
+  return batches.flat().sort((a, b) => a.ms - b.ms);
+}
+
+/** Agrège le tableau de bord sur les mesures des dernières 24 h (toutes salles). */
 export async function fetchDashboardSummary(): Promise<DashboardSummary> {
   const rooms = await listRooms();
-  const n = rooms.length || 1;
-  const temperature = round1(rooms.reduce((s, r) => s + r.temperature, 0) / n);
-  const co2 = round1(rooms.reduce((s, r) => s + r.co2, 0) / n);
-  const noise = round1(rooms.reduce((s, r) => s + r.noise, 0) / n);
-  const light = round1(rooms.reduce((s, r) => s + r.light, 0) / n);
-  const comfortScore = Math.round(rooms.reduce((s, r) => s + r.comfortScore, 0) / n) || 92;
+  const since = new Date(Date.now() - DASHBOARD_24H_MS);
+  const sinceTs = Timestamp.fromDate(since);
+  const nowMs = Date.now();
 
-  let temperatureData = fallbackTemperatureData;
-  let co2Data = fallbackCo2Data;
+  const rows = await fetchMeasurementsMergedLast24h(rooms, since, sinceTs);
 
-  try {
-    const mq = query(collectionGroup(db, 'measurements'), orderBy('timestamp', 'desc'), limit(48));
-    const mSnap = await getDocs(mq);
-    const points = mSnap.docs
-      .map((d) => {
-        const x = d.data();
-        const ts = x.timestamp as Timestamp | undefined;
-        const date = ts?.toDate?.() ?? new Date();
-        return {
-          time: `${date.getHours().toString().padStart(2, '0')}:${date.getMinutes().toString().padStart(2, '0')}`,
-          temperature: Number(x.temperature ?? 0),
-          co2: Number(x.co2 ?? 0),
-          t: date.getTime(),
-        };
-      })
-      .sort((a, b) => a.t - b.t);
-    if (points.length > 0) {
-      temperatureData = points.map((p) => ({ time: p.time, value: p.temperature }));
-      co2Data = points.map((p) => ({ time: p.time, value: p.co2 }));
+  const temperatures = rows.map((r) => r.temperature).filter((v): v is number => v != null);
+  const co2s = rows.map((r) => r.co2).filter((v): v is number => v != null);
+  const noises = rows.map((r) => r.noise).filter((v): v is number => v != null);
+  const lights = rows.map((r) => r.light).filter((v): v is number => v != null);
+
+  const temperature = averageNumbers(temperatures);
+  const co2 = averageNumbers(co2s);
+  const noise = averageNumbers(noises);
+  const light = averageNumbers(lights);
+
+  const comfortScores = rows
+    .map((r) =>
+      computeComfortScoreFromSensors({
+        temperature: r.temperature,
+        humidity: r.humidity,
+        co2: r.co2,
+        noise: r.noise,
+        light: r.light,
+      }),
+    )
+    .filter((s): s is number => s != null);
+  const comfortScore =
+    comfortScores.length > 0
+      ? Math.round(comfortScores.reduce((a, b) => a + b, 0) / comfortScores.length)
+      : 0;
+
+  const sinceMs = since.getTime();
+  const startBucket = Math.floor(sinceMs / HOUR_MS) * HOUR_MS;
+  type BucketCell = { temps: number[]; co2s: number[]; lights: number[]; noises: number[] };
+  const bucketMap = new Map<number, BucketCell>();
+
+  for (let b = startBucket; b <= nowMs + HOUR_MS; b += HOUR_MS) {
+    bucketMap.set(b, { temps: [], co2s: [], lights: [], noises: [] });
+  }
+
+  for (const r of rows) {
+    if (r.ms < sinceMs || r.ms > nowMs) continue;
+    const b = Math.floor(r.ms / HOUR_MS) * HOUR_MS;
+    const entry = bucketMap.get(b);
+    if (!entry) continue;
+    if (r.temperature != null) entry.temps.push(r.temperature);
+    if (r.co2 != null) entry.co2s.push(r.co2);
+    if (r.light != null) entry.lights.push(r.light);
+    if (r.noise != null) entry.noises.push(r.noise);
+  }
+
+  const temperatureData: { time: string; value: number }[] = [];
+  const co2Data: { time: string; value: number }[] = [];
+  const lightData: { time: string; value: number }[] = [];
+  const noiseData: { time: string; value: number }[] = [];
+
+  const sortedBuckets = Array.from(bucketMap.keys()).sort((a, b) => a - b);
+  for (const b of sortedBuckets) {
+    const cell = bucketMap.get(b);
+    if (!cell) continue;
+    const d = new Date(b);
+    const label = `${d.getMonth() + 1}/${d.getDate()} ${String(d.getHours()).padStart(2, '0')}:00`;
+    if (cell.temps.length > 0) {
+      temperatureData.push({ time: label, value: averageNumbers(cell.temps) });
     }
-  } catch {
-    /* index manquant ou pas de mesures : fallback */
+    if (cell.co2s.length > 0) {
+      co2Data.push({ time: label, value: averageNumbers(cell.co2s) });
+    }
+    if (cell.lights.length > 0) {
+      lightData.push({ time: label, value: averageNumbers(cell.lights) });
+    }
+    if (cell.noises.length > 0) {
+      noiseData.push({ time: label, value: averageNumbers(cell.noises) });
+    }
   }
 
   return {
@@ -637,6 +925,8 @@ export async function fetchDashboardSummary(): Promise<DashboardSummary> {
     light,
     temperatureData,
     co2Data,
+    lightData,
+    noiseData,
     roomOverview: {
       total: rooms.length,
       available: rooms.filter((r) => r.occupancy === 0).length,
@@ -750,19 +1040,12 @@ export async function seedFirestoreIfEmpty(): Promise<boolean> {
       name: r.name,
       capacity: r.capacity,
       occupancy: r.occupancy,
-      comfortScore: 88 + Math.floor(Math.random() * 8),
-      temperature: 21.2 + Math.random() * 2.5,
-      humidity: 42 + Math.random() * 10,
-      co2: 480 + Math.random() * 200,
-      noise: 38 + Math.random() * 8,
-      light: 420 + Math.random() * 80,
       createdAt: Timestamp.now(),
     });
 
     for (let i = 0; i < 8; i++) {
       const t = Timestamp.fromDate(new Date(Date.now() - (8 - i) * 3600000));
-      await addDoc(collection(db, 'rooms', ref.id, 'measurements'), {
-        timestamp: t,
+      await setRoomMeasurementDoc(ref.id, t, {
         temperature: 21 + Math.random() * 3,
         humidity: 40 + Math.random() * 15,
         co2: 450 + Math.random() * 220,
