@@ -10,6 +10,7 @@ import {
   Trash2,
   Edit,
   CalendarClock,
+  Camera,
 } from 'lucide-react';
 import React, { useEffect, useState } from 'react';
 import {
@@ -761,26 +762,34 @@ export default function AdminSettings() {
       {activeTab === 'roomData' && (
         <div className="bg-white rounded-2xl shadow-lg border border-gray-100 overflow-hidden">
           <div className="p-6 border-b border-gray-100">
-            <h3 className="font-semibold text-gray-900">Mesures salles (historique)</h3>
+            <h3 className="font-semibold text-gray-900">Mesures salles</h3>
             <p className="mt-2 text-sm text-gray-600 max-w-3xl">
-              Chaque enregistrement stocke la <strong>date</strong> et les valeurs{' '}
-              <strong>température, humidité, CO₂, bruit, lumière</strong>. L’affichage des courbes et des dernières
-              valeurs se fait dans le détail de chaque salle. Ici vous pouvez uniquement{' '}
-              <strong>supprimer un intervalle</strong> de mesures pour une salle, ou capturer l’état actuel de toutes les
-              salles.
+              Gérez l’historique des capteurs (température, humidité, CO₂, bruit, lumière). Les courbes et les dernières
+              valeurs se consultent dans le détail de chaque salle.{' '}
+              <strong className="font-medium text-gray-800">Capturer l’état actuel</strong> ajoute pour chaque salle un
+              point daté du moment du clic, en reprenant la dernière mesure connue (ou des valeurs vides).
             </p>
-            <div className="mt-4 flex flex-wrap gap-3">
+            <div className="mt-4">
               <button
                 type="button"
                 disabled={measureBusy || rooms.length === 0}
                 onClick={() => void handleAppendSnapshotsAllRooms()}
-                className="rounded-xl bg-emerald-600 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-700 disabled:opacity-50"
+                className="inline-flex items-center gap-2 rounded-xl bg-emerald-500 px-4 py-2 text-sm font-medium text-white transition hover:bg-emerald-600 disabled:cursor-not-allowed disabled:opacity-50"
               >
+                <Camera className="h-4 w-4 shrink-0" aria-hidden />
                 Capturer l’état actuel (toutes les salles)
               </button>
             </div>
           </div>
+
           <div className="p-6 space-y-5 max-w-2xl">
+            <div>
+              <h4 className="text-sm font-semibold text-gray-900">Suppression par période</h4>
+              <p className="mt-1 text-sm text-gray-600">
+                Choisissez une salle et un intervalle : toutes les mesures dont l’horodatage est compris dans cette plage
+                seront supprimées définitivement.
+              </p>
+            </div>
             <div>
               <label className="mb-1 block text-sm font-medium text-gray-700">Salle</label>
               <select
@@ -816,13 +825,14 @@ export default function AdminSettings() {
                 />
               </div>
             </div>
-            <div className="flex flex-wrap gap-3">
+            <div className="mt-4">
               <button
                 type="button"
                 disabled={measureBusy}
                 onClick={() => void handleDeleteMeasureRange()}
-                className="rounded-xl border-2 border-red-900 bg-red-600 px-5 py-2.5 text-sm font-semibold !text-white shadow-md hover:bg-red-700 hover:border-red-950 disabled:cursor-not-allowed disabled:border-red-400 disabled:bg-red-400 disabled:!text-white disabled:opacity-100"
+                className="inline-flex items-center gap-2 rounded-xl bg-red-500 px-4 py-2 text-sm font-medium text-white transition hover:bg-red-600 disabled:cursor-not-allowed disabled:opacity-50"
               >
+                <Trash2 className="h-4 w-4 shrink-0" aria-hidden />
                 Supprimer la période
               </button>
             </div>

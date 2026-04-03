@@ -184,7 +184,7 @@ export default function TopNav({
                     pendingAlerts.length === 0 ? (
                       <div className="flex flex-col items-center justify-center py-16 px-6 text-center text-gray-600">
                         <Inbox className="w-14 h-14 mb-3 text-gray-400" />
-                        <p className="text-base">Aucune demande de résolution en attente.</p>
+                        <p className="text-base">Aucune notification.</p>
                       </div>
                     ) : (
                       <ul className="space-y-3">
