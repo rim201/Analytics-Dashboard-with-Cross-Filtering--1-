@@ -680,6 +680,149 @@ export async function deleteRoomMeasurementsInRange(roomId: string, start: Date,
   return deleted;
 }
 
+// —— Rétention automatique des mesures (settings + purge) —— //
+
+const RETENTION_SETTINGS_PATH = ['settings', 'retention'] as const;
+/** Défaut : semaine ISO en cours + semaine ISO précédente (bornes au lundi 00:00 local). */
+export const DEFAULT_RETENTION_WEEKS = 2;
+export const MIN_RETENTION_WEEKS = 1;
+export const MAX_RETENTION_WEEKS = 104;
+/** Intervalle minimum entre deux purges automatiques déclenchées depuis l’app (évite les boucles). */
+const AUTO_PURGE_MIN_INTERVAL_MS = 24 * 60 * 60 * 1000;
+
+export type RetentionSettings = {
+  retentionWeeks: number;
+  autoPurgeEnabled: boolean;
+  lastPurgeAt: Date | null;
+};
+
+function retentionSettingsRef() {
+  return doc(db, RETENTION_SETTINGS_PATH[0], RETENTION_SETTINGS_PATH[1]);
+}
+
+export async function getRetentionSettings(): Promise<RetentionSettings> {
+  const snap = await getDoc(retentionSettingsRef());
+  if (!snap.exists()) {
+    return {
+      retentionWeeks: DEFAULT_RETENTION_WEEKS,
+      autoPurgeEnabled: true,
+      lastPurgeAt: null,
+    };
+  }
+  const d = snap.data();
+  let weeks = Math.round(Number(d.retentionWeeks));
+  if (!Number.isFinite(weeks)) weeks = DEFAULT_RETENTION_WEEKS;
+  weeks = Math.min(MAX_RETENTION_WEEKS, Math.max(MIN_RETENTION_WEEKS, weeks));
+  const lp = d.lastPurgeAt;
+  let lastPurgeAt: Date | null = null;
+  if (lp instanceof Timestamp) lastPurgeAt = lp.toDate();
+  else if (lp && typeof (lp as Timestamp).toDate === 'function') lastPurgeAt = (lp as Timestamp).toDate();
+  return {
+    retentionWeeks: weeks,
+    autoPurgeEnabled: d.autoPurgeEnabled !== false,
+    lastPurgeAt,
+  };
+}
+
+export async function updateRetentionSettings(
+  patch: Partial<{ retentionWeeks: number; autoPurgeEnabled: boolean; lastPurgeAt: Date | null }>,
+): Promise<void> {
+  const payload: Record<string, unknown> = {};
+  if (patch.retentionWeeks !== undefined) {
+    const w = Math.round(patch.retentionWeeks);
+    payload.retentionWeeks = Math.min(MAX_RETENTION_WEEKS, Math.max(MIN_RETENTION_WEEKS, w));
+  }
+  if (patch.autoPurgeEnabled !== undefined) payload.autoPurgeEnabled = patch.autoPurgeEnabled;
+  if (patch.lastPurgeAt !== undefined) {
+    payload.lastPurgeAt =
+      patch.lastPurgeAt === null ? deleteField() : Timestamp.fromDate(patch.lastPurgeAt);
+  }
+  await setDoc(retentionSettingsRef(), payload, { merge: true });
+}
+
+/** Supprime les mesures strictement antérieures à `before` pour une salle (par lots). */
+export async function purgeRoomMeasurementsBefore(roomId: string, before: Date): Promise<number> {
+  const beforeTs = Timestamp.fromDate(before);
+  const col = collection(db, 'rooms', roomId, 'measurements');
+  let total = 0;
+  for (;;) {
+    const q = query(col, where('timestamp', '<', beforeTs), limit(450));
+    const snap = await getDocs(q);
+    if (snap.empty) break;
+    let batch = writeBatch(db);
+    let n = 0;
+    for (const d of snap.docs) {
+      batch.delete(d.ref);
+      n++;
+      if (n >= 450) {
+        await batch.commit();
+        batch = writeBatch(db);
+        n = 0;
+      }
+    }
+    if (n > 0) await batch.commit();
+    total += snap.size;
+    if (snap.size < 450) break;
+  }
+  return total;
+}
+
+/**
+ * Lundi 00:00:00.000 **heure locale** du début de la semaine qui contient `d` (semaine ISO : lundi = jour 1).
+ */
+export function startOfLocalIsoWeek(d: Date): Date {
+  const x = new Date(d.getFullYear(), d.getMonth(), d.getDate());
+  const dow = x.getDay();
+  const delta = dow === 0 ? -6 : 1 - dow;
+  x.setDate(x.getDate() + delta);
+  x.setHours(0, 0, 0, 0);
+  return x;
+}
+
+/**
+ * Borne inférieure des mesures **conservées** : lundi 00:00 local de la plus ancienne semaine ISO gardée.
+ * Ex. `retentionWeeks === 2` → lundi de la semaine précédant celle en cours (on garde 2 semaines ISO complètes en cours + précédente).
+ */
+export function computeRetentionCutoffIsoWeeks(retentionWeeks: number, now: Date = new Date()): Date {
+  const w = Math.min(MAX_RETENTION_WEEKS, Math.max(MIN_RETENTION_WEEKS, Math.round(retentionWeeks)));
+  const thisMonday = startOfLocalIsoWeek(now);
+  const oldestMonday = new Date(thisMonday);
+  oldestMonday.setDate(oldestMonday.getDate() - (w - 1) * 7);
+  return oldestMonday;
+}
+
+/**
+ * Supprime toutes les mesures strictement **antérieures** au lundi 00:00 local de la plus ancienne semaine ISO conservée.
+ */
+export async function purgeMeasurementsOlderThanRetentionWeeks(retentionWeeks: number): Promise<{
+  deleted: number;
+  cutoff: Date;
+}> {
+  const w = Math.min(MAX_RETENTION_WEEKS, Math.max(MIN_RETENTION_WEEKS, Math.round(retentionWeeks)));
+  const cutoff = computeRetentionCutoffIsoWeeks(w);
+  const rooms = await listRooms();
+  let deleted = 0;
+  for (const r of rooms) {
+    deleted += await purgeRoomMeasurementsBefore(r.id, cutoff);
+  }
+  return { deleted, cutoff };
+}
+
+/**
+ * Si la purge auto est activée et qu’au moins 24 h se sont écoulées depuis la dernière purge, supprime les mesures trop anciennes et met à jour `lastPurgeAt`.
+ */
+export async function maybeRunAutoRetentionPurge(): Promise<{ ran: boolean; deleted: number }> {
+  const s = await getRetentionSettings();
+  if (!s.autoPurgeEnabled) return { ran: false, deleted: 0 };
+  const now = Date.now();
+  if (s.lastPurgeAt && now - s.lastPurgeAt.getTime() < AUTO_PURGE_MIN_INTERVAL_MS) {
+    return { ran: false, deleted: 0 };
+  }
+  const { deleted } = await purgeMeasurementsOlderThanRetentionWeeks(s.retentionWeeks);
+  await updateRetentionSettings({ lastPurgeAt: new Date() });
+  return { ran: true, deleted };
+}
+
 export async function createRoom(payload: {
   name: string;
   capacity: number;

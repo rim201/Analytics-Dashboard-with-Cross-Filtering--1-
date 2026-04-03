@@ -11,18 +11,25 @@ import {
   Edit,
   CalendarClock,
   Camera,
+  Database,
 } from 'lucide-react';
 import React, { useEffect, useState } from 'react';
 import {
   appendCurrentSnapshotsForAllRooms,
   createDevice,
+  DEFAULT_RETENTION_WEEKS,
   deleteDevice,
   deleteRoomMeasurementsInRange,
+  getRetentionSettings,
   listDevices,
   listRooms,
   listUsers,
+  MAX_RETENTION_WEEKS,
+  MIN_RETENTION_WEEKS,
   deleteUser,
+  purgeMeasurementsOlderThanRetentionWeeks,
   updateDevice,
+  updateRetentionSettings,
   updateUser,
   type DeviceRecord,
   type UserRecord,
@@ -70,6 +77,11 @@ export default function AdminSettings() {
   const [measureDateFrom, setMeasureDateFrom] = useState('');
   const [measureDateTo, setMeasureDateTo] = useState('');
   const [measureBusy, setMeasureBusy] = useState(false);
+  const [retentionWeeksInput, setRetentionWeeksInput] = useState(String(DEFAULT_RETENTION_WEEKS));
+  const [retentionAutoPurge, setRetentionAutoPurge] = useState(true);
+  const [retentionLastPurge, setRetentionLastPurge] = useState<Date | null>(null);
+  const [retentionLoadBusy, setRetentionLoadBusy] = useState(false);
+  const [retentionActionBusy, setRetentionActionBusy] = useState(false);
 
   const showToast = (type: ToastState['type'], message: string) => {
     setToast({ type, message });
@@ -94,6 +106,32 @@ export default function AdminSettings() {
   useEffect(() => {
     void reloadAll();
   }, []);
+
+  useEffect(() => {
+    if (activeTab !== 'system') return;
+    let cancelled = false;
+    setRetentionLoadBusy(true);
+    void (async () => {
+      try {
+        const s = await getRetentionSettings();
+        if (cancelled) return;
+        setRetentionWeeksInput(String(s.retentionWeeks));
+        setRetentionAutoPurge(s.autoPurgeEnabled);
+        setRetentionLastPurge(s.lastPurgeAt);
+      } catch {
+        if (!cancelled) {
+          setRetentionWeeksInput(String(DEFAULT_RETENTION_WEEKS));
+          setRetentionAutoPurge(true);
+          setRetentionLastPurge(null);
+        }
+      } finally {
+        if (!cancelled) setRetentionLoadBusy(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [activeTab]);
 
   const selectTab = (tab: typeof activeTab) => {
     setActiveTab(tab);
@@ -314,6 +352,63 @@ export default function AdminSettings() {
       showToast('error', 'Impossible de supprimer (vérifiez les règles Firestore ou un index).');
     } finally {
       setMeasureBusy(false);
+    }
+  };
+
+  const parseRetentionWeeksFromInput = (): number | null => {
+    const n = parseInt(retentionWeeksInput.trim(), 10);
+    if (!Number.isFinite(n)) return null;
+    return Math.min(MAX_RETENTION_WEEKS, Math.max(MIN_RETENTION_WEEKS, n));
+  };
+
+  const handleSaveRetentionSettings = async () => {
+    const weeks = parseRetentionWeeksFromInput();
+    if (weeks === null) {
+      showToast('error', 'Nombre de semaines invalide.');
+      return;
+    }
+    setRetentionActionBusy(true);
+    try {
+      await updateRetentionSettings({ retentionWeeks: weeks, autoPurgeEnabled: retentionAutoPurge });
+      setRetentionWeeksInput(String(weeks));
+      showToast('success', 'Paramètres de rétention enregistrés.');
+    } catch {
+      showToast('error', 'Impossible d’enregistrer les paramètres.');
+    } finally {
+      setRetentionActionBusy(false);
+    }
+  };
+
+  const handleRunRetentionPurgeNow = async () => {
+    const weeks = parseRetentionWeeksFromInput();
+    if (weeks === null) {
+      showToast('error', 'Nombre de semaines invalide.');
+      return;
+    }
+    if (
+      !window.confirm(
+        `Supprimer toutes les mesures antérieures au lundi 00:00 (heure locale) de la plus ancienne des ${weeks} semaine(s) ISO conservées ? Toutes les salles sont concernées. Irréversible.`,
+      )
+    ) {
+      return;
+    }
+    setRetentionActionBusy(true);
+    try {
+      const { deleted, cutoff } = await purgeMeasurementsOlderThanRetentionWeeks(weeks);
+      await updateRetentionSettings({
+        retentionWeeks: weeks,
+        autoPurgeEnabled: retentionAutoPurge,
+        lastPurgeAt: new Date(),
+      });
+      setRetentionLastPurge(new Date());
+      showToast(
+        'success',
+        `${deleted} mesure(s) supprimée(s) — conservation à partir du ${cutoff.toLocaleString('fr-FR')} (lundi 0h, semaines ISO).`,
+      );
+    } catch {
+      showToast('error', 'Échec du nettoyage (réseau, règles Firestore ou index).');
+    } finally {
+      setRetentionActionBusy(false);
     }
   };
 
@@ -868,6 +963,88 @@ export default function AdminSettings() {
                 </div>
               </div>
             </div>
+          </div>
+
+          {/* Rétention des mesures */}
+          <div className="bg-white rounded-2xl p-6 shadow-lg border border-gray-100">
+            <div className="flex items-center space-x-3 mb-4">
+              <Database className="w-6 h-6 text-gray-700" />
+              <h3 className="font-semibold text-gray-900">Rétention des mesures (Firestore)</h3>
+            </div>
+            <p className="text-sm text-gray-600 mb-4 max-w-3xl">
+              La rétention se calcule en <strong>semaines ISO</strong> (lundi 00:00 → dimanche, selon l’heure locale du
+              navigateur). Les mesures dont l’horodatage est <strong>avant le lundi 0h</strong> de la plus ancienne semaine
+              gardée sont supprimées. Par défaut : <strong>2 semaines ISO</strong> (semaine en cours + semaine précédente).
+              Purge automatique au plus une fois par 24 h lorsqu’un admin ouvre l’app, si l’option est activée.
+            </p>
+            {retentionLoadBusy ? (
+              <p className="text-sm text-gray-500">Chargement des paramètres…</p>
+            ) : (
+              <div className="space-y-4 max-w-xl">
+                <div>
+                  <label htmlFor="retention-weeks" className="block text-sm font-medium text-gray-700 mb-1">
+                    Nombre de semaines ISO à conserver
+                  </label>
+                  <input
+                    id="retention-weeks"
+                    type="number"
+                    min={MIN_RETENTION_WEEKS}
+                    max={MAX_RETENTION_WEEKS}
+                    value={retentionWeeksInput}
+                    onChange={(e) => setRetentionWeeksInput(e.target.value)}
+                    disabled={retentionActionBusy}
+                    className="w-32 rounded-xl border border-gray-300 px-3 py-2 outline-none focus:ring-2 focus:ring-emerald-500 disabled:bg-gray-100"
+                  />
+                  <p className="mt-1 text-xs text-gray-500">
+                    Entre {MIN_RETENTION_WEEKS} et {MAX_RETENTION_WEEKS}. Seuil de suppression : lundi 0h local de la
+                    semaine la plus ancienne encore incluse.
+                  </p>
+                </div>
+                <div className="flex items-center justify-between p-3 bg-gray-50 rounded-xl">
+                  <div>
+                    <div className="font-medium text-gray-900">Purge automatique</div>
+                    <div className="text-sm text-gray-500">
+                      Lancer le nettoyage selon ces réglages (max. 1× / 24 h par session admin)
+                    </div>
+                  </div>
+                  <label className="relative inline-flex cursor-pointer items-center">
+                    <input
+                      type="checkbox"
+                      className="peer sr-only"
+                      checked={retentionAutoPurge}
+                      onChange={(e) => setRetentionAutoPurge(e.target.checked)}
+                      disabled={retentionActionBusy}
+                    />
+                    <div className="relative h-6 w-11 rounded-full bg-gray-200 after:absolute after:left-[2px] after:top-[2px] after:h-5 after:w-5 after:rounded-full after:border after:border-gray-300 after:bg-white after:transition-all after:content-[''] peer-checked:bg-emerald-600 peer-checked:after:translate-x-full peer-checked:after:border-white peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-emerald-300 peer-disabled:opacity-50" />
+                  </label>
+                </div>
+                <p className="text-xs text-gray-500">
+                  Dernière purge enregistrée :{' '}
+                  {retentionLastPurge
+                    ? retentionLastPurge.toLocaleString('fr-FR')
+                    : '— (aucune encore en base)'}
+                </p>
+                <div className="flex flex-wrap gap-3 pt-1">
+                  <button
+                    type="button"
+                    disabled={retentionActionBusy}
+                    onClick={() => void handleSaveRetentionSettings()}
+                    className="rounded-xl bg-emerald-500 px-4 py-2 font-medium text-white transition hover:bg-emerald-600 disabled:opacity-50"
+                  >
+                    Enregistrer les paramètres
+                  </button>
+                  <button
+                    type="button"
+                    disabled={retentionActionBusy}
+                    onClick={() => void handleRunRetentionPurgeNow()}
+                    className="inline-flex items-center gap-2 rounded-xl bg-red-500 px-4 py-2 font-medium text-white transition hover:bg-red-600 disabled:opacity-50"
+                  >
+                    <Trash2 className="h-4 w-4 shrink-0" aria-hidden />
+                    Nettoyer maintenant
+                  </button>
+                </div>
+              </div>
+            )}
           </div>
 
           {/* Security Settings */}

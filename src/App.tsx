@@ -3,7 +3,7 @@ import { onAuthStateChanged } from 'firebase/auth';
 import type { User } from 'firebase/auth';
 import LoginPage from './components/LoginPage';
 import FirstLoginPasswordChange from './components/FirstLoginPasswordChange';
-import { seedAlertsIfEmpty, seedFirestoreIfEmpty } from './services/firestoreApi';
+import { maybeRunAutoRetentionPurge, seedAlertsIfEmpty, seedFirestoreIfEmpty } from './services/firestoreApi';
 import MainDashboard from './components/MainDashboard';
 import RoomsManagement from './components/RoomsManagement';
 import RoomDetails from './components/RoomDetails';
@@ -90,6 +90,11 @@ function App() {
     if (!userProfile || userProfile.mustChangePassword) return;
     void seedFirestoreIfEmpty();
     void seedAlertsIfEmpty();
+  }, [userProfile]);
+
+  useEffect(() => {
+    if (!userProfile || userProfile.mustChangePassword || userProfile.role !== 'admin') return;
+    void maybeRunAutoRetentionPurge();
   }, [userProfile]);
 
   useEffect(() => {
