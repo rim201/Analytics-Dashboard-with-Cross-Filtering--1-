@@ -171,7 +171,6 @@ function App() {
               roomId={selectedRoomId}
               onBack={() => setCurrentPage('rooms')}
               isAdmin={isAdmin}
-              onAddRoom={() => setCurrentPage('rooms')}
             />
           )}
           {currentPage === 'alerts' && (

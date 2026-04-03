@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
-import { ArrowLeft, Users, Thermometer, Wind, Volume2, Sun, Droplets, Brain, Plus } from 'lucide-react';
+import { ArrowLeft, Users, Thermometer, Wind, Volume2, Sun, Droplets, Brain } from 'lucide-react';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
 import '../styles/custom.css';
 import { thresholdsForAggressiveness } from '../services/aiRecommendations';
@@ -13,10 +13,7 @@ const LUX_STEP = 10;
 interface RoomDetailsProps {
   roomId: string | null;
   onBack: () => void;
-  /** Si false, le bouton « Add Room » n’est pas affiché. */
   isAdmin?: boolean;
-  /** Appelé quand un admin clique sur « Add Room » (ex. aller à la liste des salles). */
-  onAddRoom?: () => void;
 }
 
 interface RoomInfo {
@@ -27,7 +24,7 @@ interface RoomInfo {
   status: 'available' | 'busy';
 }
 
-export default function RoomDetails({ roomId, onBack, isAdmin = false, onAddRoom }: RoomDetailsProps) {
+export default function RoomDetails({ roomId, onBack, isAdmin = false }: RoomDetailsProps) {
   const [measurements, setMeasurements] = useState<MeasurementRow[]>([]);
   const [roomInfo, setRoomInfo] = useState<RoomInfo | null>(null);
   const [loading, setLoading] = useState(true);
@@ -296,18 +293,6 @@ export default function RoomDetails({ roomId, onBack, isAdmin = false, onAddRoom
             </div>
           </div>
         </div>
-        {isAdmin ? (
-          <div className="flex-shrink-0 flex items-center gap-2">
-            <button
-              type="button"
-              onClick={() => onAddRoom?.()}
-              className="inline-flex items-center gap-2 px-3 py-2 rounded-lg bg-emerald-500 text-white text-sm shadow-sm hover:bg-emerald-600 transition"
-            >
-              <Plus className="w-4 h-4" />
-              Add Room
-            </button>
-          </div>
-        ) : null}
       </div>
 
       {/* AI Status Banner */}
