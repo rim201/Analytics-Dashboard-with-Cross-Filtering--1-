@@ -12,14 +12,17 @@ import {
   CalendarClock,
   Camera,
   Database,
+  FileText,
 } from 'lucide-react';
 import React, { useEffect, useState } from 'react';
 import {
   appendCurrentSnapshotsForAllRooms,
+  appendAiActivityLog,
   createDevice,
   DEFAULT_RETENTION_WEEKS,
   deleteDevice,
   deleteRoomMeasurementsInRange,
+  getAiConfig,
   getRetentionSettings,
   listDevices,
   listRooms,
@@ -28,9 +31,12 @@ import {
   MIN_RETENTION_WEEKS,
   deleteUser,
   purgeMeasurementsOlderThanRetentionWeeks,
+  requestAiModelRetrain,
+  updateAiSettings,
   updateDevice,
   updateRetentionSettings,
   updateUser,
+  type AiActivityLogEntry,
   type DeviceRecord,
   type UserRecord,
 } from '../services/firestoreApi';
@@ -82,6 +88,15 @@ export default function AdminSettings() {
   const [retentionLastPurge, setRetentionLastPurge] = useState<Date | null>(null);
   const [retentionLoadBusy, setRetentionLoadBusy] = useState(false);
   const [retentionActionBusy, setRetentionActionBusy] = useState(false);
+  const [aiForm, setAiForm] = useState({
+    aggressiveness: 7,
+    autoApplyRecommendations: false,
+  });
+  const [aiActivityLog, setAiActivityLog] = useState<AiActivityLogEntry[]>([]);
+  const [aiLastRetrain, setAiLastRetrain] = useState<Date | null>(null);
+  const [aiLoadBusy, setAiLoadBusy] = useState(false);
+  const [aiSaveBusy, setAiSaveBusy] = useState(false);
+  const [aiLogModalOpen, setAiLogModalOpen] = useState(false);
 
   const showToast = (type: ToastState['type'], message: string) => {
     setToast({ type, message });
@@ -126,6 +141,33 @@ export default function AdminSettings() {
         }
       } finally {
         if (!cancelled) setRetentionLoadBusy(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [activeTab]);
+
+  useEffect(() => {
+    if (activeTab !== 'ai') return;
+    let cancelled = false;
+    setAiLoadBusy(true);
+    void (async () => {
+      try {
+        const { settings, activityLog } = await getAiConfig({ includeLog: true });
+        if (cancelled) return;
+        setAiForm({
+          aggressiveness: settings.aggressiveness,
+          autoApplyRecommendations: settings.autoApplyRecommendations,
+        });
+        setAiActivityLog(activityLog);
+        setAiLastRetrain(settings.lastRetrainRequestedAt);
+      } catch {
+        if (!cancelled) {
+          setAiActivityLog([]);
+        }
+      } finally {
+        if (!cancelled) setAiLoadBusy(false);
       }
     })();
     return () => {
@@ -409,6 +451,53 @@ export default function AdminSettings() {
       showToast('error', 'Échec du nettoyage (réseau, règles Firestore ou index).');
     } finally {
       setRetentionActionBusy(false);
+    }
+  };
+
+  const refreshAiBundle = async () => {
+    const { settings, activityLog } = await getAiConfig({ includeLog: true });
+    setAiForm({
+      aggressiveness: settings.aggressiveness,
+      autoApplyRecommendations: settings.autoApplyRecommendations,
+    });
+    setAiActivityLog(activityLog);
+    setAiLastRetrain(settings.lastRetrainRequestedAt);
+  };
+
+  const handleSaveAiSettings = async () => {
+    setAiSaveBusy(true);
+    try {
+      await updateAiSettings({
+        aggressiveness: aiForm.aggressiveness,
+        autoApplyRecommendations: aiForm.autoApplyRecommendations,
+      });
+      await appendAiActivityLog(`Paramètres IA enregistrés (${new Date().toLocaleString('fr-FR')}).`);
+      await refreshAiBundle();
+      showToast('success', 'Configuration IA enregistrée.');
+    } catch {
+      showToast('error', 'Impossible d’enregistrer la configuration IA.');
+    } finally {
+      setAiSaveBusy(false);
+    }
+  };
+
+  const handleAiRetrain = async () => {
+    if (
+      !window.confirm(
+        'Enregistrer une demande de réentraînement ? (Aucun job cloud n’est déclenché automatiquement dans cette version ; l’événement est journalisé.)',
+      )
+    ) {
+      return;
+    }
+    setAiSaveBusy(true);
+    try {
+      await requestAiModelRetrain();
+      await refreshAiBundle();
+      showToast('success', 'Demande enregistrée dans le journal.');
+    } catch {
+      showToast('error', 'Échec de l’enregistrement.');
+    } finally {
+      setAiSaveBusy(false);
     }
   };
 
@@ -1081,61 +1170,165 @@ export default function AdminSettings() {
 
       {activeTab === 'ai' && (
         <div className="space-y-4">
-          {/* AI Model Info */}
           <div className="bg-gradient-to-br from-emerald-50 to-blue-50 rounded-2xl p-6 border border-emerald-200/50">
-            <div className="flex items-start space-x-4">
-              <div className="w-12 h-12 bg-gradient-to-br from-emerald-400 to-emerald-600 rounded-xl flex items-center justify-center flex-shrink-0">
-                <Brain className="w-6 h-6 text-white" />
-              </div>
-              <div className="flex-1">
-                <h3 className="font-semibold text-gray-900 mb-2">AI Model Configuration</h3>
-                <p className="text-sm text-gray-600 mb-4">
-                  Current version: v2.4.1 • Training dataset: 2,847 samples • Accuracy: 94.5%
-                </p>
-                <div className="flex space-x-3">
-                  <button className="px-4 py-2 bg-emerald-500 text-white rounded-xl font-medium hover:bg-emerald-600 transition">
-                    Retrain Model
-                  </button>
-                  <button className="px-4 py-2 bg-white text-gray-700 rounded-xl font-medium hover:bg-gray-50 transition shadow-sm">
-                    View Logs
-                  </button>
+            <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+              <div className="flex items-start space-x-4">
+                <div className="w-12 h-12 bg-gradient-to-br from-emerald-400 to-emerald-600 rounded-xl flex items-center justify-center flex-shrink-0">
+                  <Brain className="w-6 h-6 text-white" />
                 </div>
+                <div className="flex-1 min-w-0">
+                  <h3 className="font-semibold text-gray-900 mb-2">IA — journal & réentraînement</h3>
+                  {aiLoadBusy ? (
+                    <p className="text-sm text-gray-500">Chargement…</p>
+                  ) : (
+                    <>
+                      <p className="text-sm text-gray-600 mb-2">
+                        Historique des actions et demande de réentraînement (journalisée dans Firestore, sans job cloud
+                        automatique ici).
+                      </p>
+                      <p className="text-xs text-gray-500">
+                        Dernière demande de réentraînement :{' '}
+                        {aiLastRetrain ? aiLastRetrain.toLocaleString('fr-FR') : '—'}
+                      </p>
+                    </>
+                  )}
+                </div>
+              </div>
+              <div className="flex flex-wrap gap-2 shrink-0">
+                <button
+                  type="button"
+                  disabled={aiSaveBusy || aiLoadBusy}
+                  onClick={() => void handleAiRetrain()}
+                  className="px-4 py-2 bg-emerald-500 text-white rounded-xl font-medium hover:bg-emerald-600 transition disabled:opacity-50"
+                >
+                  Demande de réentraînement
+                </button>
+                <button
+                  type="button"
+                  disabled={aiLoadBusy}
+                  onClick={() => {
+                    setAiLogModalOpen(true);
+                    void (async () => {
+                      try {
+                        const { activityLog } = await getAiConfig({ includeLog: true });
+                        setAiActivityLog(activityLog);
+                      } catch {
+                        /* ignore */
+                      }
+                    })();
+                  }}
+                  className="inline-flex items-center gap-2 px-4 py-2 bg-white text-gray-700 rounded-xl font-medium hover:bg-gray-50 transition shadow-sm border border-gray-200"
+                >
+                  <FileText className="h-4 w-4" aria-hidden />
+                  Journal
+                </button>
               </div>
             </div>
           </div>
 
-          {/* AI Settings */}
           <div className="bg-white rounded-2xl p-6 shadow-lg border border-gray-100">
-            <h3 className="font-semibold text-gray-900 mb-4">Optimization Settings</h3>
-            <div className="space-y-4">
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">Optimization Aggressiveness</label>
-                <input type="range" min="1" max="10" defaultValue="7" className="w-full h-2 bg-emerald-200 rounded-full appearance-none cursor-pointer" />
-                <div className="flex justify-between text-xs text-gray-500 mt-1">
-                  <span>Conservative</span>
-                  <span>Aggressive</span>
-                </div>
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">Learning Rate</label>
-                <select defaultValue="medium" className="w-full px-4 py-2 border border-gray-300 rounded-xl focus:ring-2 focus:ring-emerald-500 focus:border-transparent outline-none">
-                  <option value="slow">Slow (0.001)</option>
-                  <option value="medium">Medium (0.01)</option>
-                  <option value="fast">Fast (0.1)</option>
-                </select>
-              </div>
-              <div className="flex items-center justify-between p-3 bg-gray-50 rounded-xl">
+            <h3 className="font-semibold text-gray-900 mb-4">Comportement des suggestions</h3>
+            {aiLoadBusy ? (
+              <p className="text-sm text-gray-500">Chargement…</p>
+            ) : (
+              <div className="space-y-5 max-w-2xl">
                 <div>
-                  <div className="font-medium text-gray-900">Auto-apply Recommendations</div>
-                  <div className="text-sm text-gray-500">Automatically apply low-risk optimizations</div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">
+                    Agressivité (1 = prudent, 10 = plus de messages){' '}
+                    <span className="text-emerald-600">({aiForm.aggressiveness})</span>
+                  </label>
+                  <input
+                    type="range"
+                    min={1}
+                    max={10}
+                    value={aiForm.aggressiveness}
+                    onChange={(e) =>
+                      setAiForm((p) => ({ ...p, aggressiveness: parseInt(e.target.value, 10) || 7 }))
+                    }
+                    disabled={aiSaveBusy}
+                    className="w-full h-2 bg-emerald-200 rounded-full appearance-none cursor-pointer disabled:opacity-50"
+                  />
+                  <div className="flex justify-between text-xs text-gray-500 mt-1">
+                    <span>Prudent</span>
+                    <span>Agressif</span>
+                  </div>
+                  <p className="text-xs text-gray-500 mt-2">
+                    Ajuste les seuils CO₂, température et lumière pour le tableau de bord et la fiche salle.
+                  </p>
                 </div>
-                <label className="relative inline-flex items-center cursor-pointer">
-                  <input type="checkbox" className="sr-only peer" />
-                  <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-emerald-300 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-emerald-600"></div>
-                </label>
+                <div className="flex items-center justify-between p-3 bg-gray-50 rounded-xl">
+                  <div>
+                    <div className="font-medium text-gray-900">Application auto des recommandations</div>
+                    <div className="text-sm text-gray-500">
+                      Si désactivé, le tableau de bord indique que les suggestions sont à valider manuellement.
+                    </div>
+                  </div>
+                  <label className="relative inline-flex cursor-pointer items-center">
+                    <input
+                      type="checkbox"
+                      className="peer sr-only"
+                      checked={aiForm.autoApplyRecommendations}
+                      onChange={(e) =>
+                        setAiForm((p) => ({ ...p, autoApplyRecommendations: e.target.checked }))
+                      }
+                      disabled={aiSaveBusy}
+                    />
+                    <div className="relative h-6 w-11 rounded-full bg-gray-200 after:absolute after:left-[2px] after:top-[2px] after:h-5 after:w-5 after:rounded-full after:border after:border-gray-300 after:bg-white after:transition-all after:content-[''] peer-checked:bg-emerald-600 peer-checked:after:translate-x-full peer-checked:after:border-white peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-emerald-300 peer-disabled:opacity-50" />
+                  </label>
+                </div>
+                <button
+                  type="button"
+                  disabled={aiSaveBusy}
+                  onClick={() => void handleSaveAiSettings()}
+                  className="rounded-xl bg-emerald-500 px-4 py-2 font-medium text-white transition hover:bg-emerald-600 disabled:opacity-50"
+                >
+                  Enregistrer
+                </button>
+              </div>
+            )}
+          </div>
+
+          {aiLogModalOpen && (
+            <div
+              className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40"
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby="ai-log-title"
+              onClick={() => setAiLogModalOpen(false)}
+            >
+              <div
+                className="bg-white rounded-2xl shadow-xl max-w-lg w-full max-h-[min(80vh,520px)] flex flex-col border border-gray-100"
+                onClick={(e) => e.stopPropagation()}
+              >
+                <div className="p-4 border-b border-gray-100 flex items-center justify-between">
+                  <h4 id="ai-log-title" className="font-semibold text-gray-900">
+                    Journal IA
+                  </h4>
+                  <button
+                    type="button"
+                    onClick={() => setAiLogModalOpen(false)}
+                    className="text-sm text-gray-500 hover:text-gray-800 px-2 py-1 rounded-lg hover:bg-gray-100"
+                  >
+                    Fermer
+                  </button>
+                </div>
+                <div className="p-4 overflow-y-auto flex-1 text-sm space-y-3">
+                  {aiActivityLog.length === 0 ? (
+                    <p className="text-gray-500">Aucune entrée pour l’instant.</p>
+                  ) : (
+                    aiActivityLog.map((entry, idx) => (
+                      <div key={`${entry.at.getTime()}-${idx}`} className="border-b border-gray-100 pb-2 last:border-0">
+                        <div className="text-xs text-gray-400 mb-0.5">
+                          {entry.at.toLocaleString('fr-FR')}
+                        </div>
+                        <div className="text-gray-800">{entry.message}</div>
+                      </div>
+                    ))
+                  )}
+                </div>
               </div>
             </div>
-          </div>
+          )}
         </div>
       )}
     </div>

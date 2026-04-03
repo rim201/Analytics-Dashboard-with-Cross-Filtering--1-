@@ -823,6 +823,138 @@ export async function maybeRunAutoRetentionPurge(): Promise<{ ran: boolean; dele
   return { ran: true, deleted };
 }
 
+// —— Paramètres IA (`settings/ai`) —— //
+
+const MAX_AI_LOG_ENTRIES = 50;
+const MAX_AI_LOG_MESSAGE_LEN = 380;
+
+/** Paramètres IA réellement utilisés par les règles de suggestion (seuils capteurs + bandeau tableau de bord). */
+export type AiSettings = {
+  aggressiveness: number;
+  autoApplyRecommendations: boolean;
+  lastRetrainRequestedAt: Date | null;
+};
+
+export type AiActivityLogEntry = { at: Date; message: string };
+
+function aiSettingsRef() {
+  return doc(db, 'settings', 'ai');
+}
+
+function defaultAiSettings(): AiSettings {
+  return {
+    aggressiveness: 7,
+    autoApplyRecommendations: false,
+    lastRetrainRequestedAt: null,
+  };
+}
+
+function mapAiActivityLog(raw: unknown): AiActivityLogEntry[] {
+  if (!Array.isArray(raw)) return [];
+  const out: AiActivityLogEntry[] = [];
+  for (const x of raw) {
+    if (!x || typeof x !== 'object') continue;
+    const msg = (x as { message?: unknown }).message;
+    const at = (x as { at?: unknown }).at;
+    if (typeof msg !== 'string') continue;
+    let d: Date;
+    if (at instanceof Timestamp) d = at.toDate();
+    else if (at && typeof (at as Timestamp).toDate === 'function') d = (at as Timestamp).toDate();
+    else d = new Date(0);
+    out.push({ at: d, message: msg.slice(0, MAX_AI_LOG_MESSAGE_LEN) });
+  }
+  return out;
+}
+
+function mapSnapToAiSettings(d: Record<string, unknown>): AiSettings {
+  const def = defaultAiSettings();
+  let ag = Math.round(Number(d.aggressiveness));
+  if (!Number.isFinite(ag)) ag = def.aggressiveness;
+  ag = Math.min(10, Math.max(1, ag));
+  const last = d.lastRetrainRequestedAt;
+  let lastRetrainRequestedAt: Date | null = null;
+  if (last instanceof Timestamp) lastRetrainRequestedAt = last.toDate();
+  else if (last && typeof (last as Timestamp).toDate === 'function') lastRetrainRequestedAt = (last as Timestamp).toDate();
+  return {
+    aggressiveness: ag,
+    autoApplyRecommendations: d.autoApplyRecommendations === true,
+    lastRetrainRequestedAt,
+  };
+}
+
+/**
+ * Lit la configuration IA et, si demandé, le journal d’activité (une seule lecture Firestore).
+ */
+export async function getAiConfig(options?: { includeLog?: boolean }): Promise<{
+  settings: AiSettings;
+  activityLog: AiActivityLogEntry[];
+}> {
+  const snap = await getDoc(aiSettingsRef());
+  if (!snap.exists()) {
+    return {
+      settings: defaultAiSettings(),
+      activityLog: [],
+    };
+  }
+  const data = snap.data() as Record<string, unknown>;
+  const settings = mapSnapToAiSettings(data);
+  const activityLog = options?.includeLog ? mapAiActivityLog(data.activityLog) : [];
+  return { settings, activityLog };
+}
+
+export async function updateAiSettings(
+  patch: Partial<Pick<AiSettings, 'aggressiveness' | 'autoApplyRecommendations'>> & {
+    lastRetrainRequestedAt?: Date | null;
+  },
+): Promise<void> {
+  const payload: Record<string, unknown> = {};
+  if (patch.aggressiveness !== undefined) {
+    const n = Math.round(Number(patch.aggressiveness));
+    payload.aggressiveness = Number.isFinite(n) ? Math.min(10, Math.max(1, n)) : 7;
+  }
+  if (patch.autoApplyRecommendations !== undefined) {
+    payload.autoApplyRecommendations = Boolean(patch.autoApplyRecommendations);
+  }
+  if (patch.lastRetrainRequestedAt !== undefined) {
+    payload.lastRetrainRequestedAt =
+      patch.lastRetrainRequestedAt === null || patch.lastRetrainRequestedAt === undefined
+        ? deleteField()
+        : Timestamp.fromDate(patch.lastRetrainRequestedAt);
+  }
+  if (Object.keys(payload).length === 0) return;
+  await setDoc(aiSettingsRef(), payload, { merge: true });
+}
+
+/** Enregistre une entrée de journal (max 50 lignes). */
+export async function appendAiActivityLog(message: string): Promise<void> {
+  const msg = message.trim().slice(0, MAX_AI_LOG_MESSAGE_LEN);
+  if (!msg) return;
+  const snap = await getDoc(aiSettingsRef());
+  const prev = snap.exists() ? mapAiActivityLog((snap.data() as Record<string, unknown>).activityLog) : [];
+  const entry = { at: Timestamp.now(), message: msg };
+  const rest = prev.map((e) => ({ at: Timestamp.fromDate(e.at), message: e.message }));
+  const next = [entry, ...rest].slice(0, MAX_AI_LOG_ENTRIES);
+  await setDoc(aiSettingsRef(), { activityLog: next }, { merge: true });
+}
+
+/** Horodate la demande de réentraînement et ajoute une ligne au journal. */
+export async function requestAiModelRetrain(): Promise<void> {
+  const snap = await getDoc(aiSettingsRef());
+  const prev = snap.exists() ? mapAiActivityLog((snap.data() as Record<string, unknown>).activityLog) : [];
+  const line = `Demande de réentraînement (${new Date().toLocaleString('fr-FR')}).`.slice(0, MAX_AI_LOG_MESSAGE_LEN);
+  const entry = { at: Timestamp.now(), message: line };
+  const rest = prev.map((e) => ({ at: Timestamp.fromDate(e.at), message: e.message }));
+  const next = [entry, ...rest].slice(0, MAX_AI_LOG_ENTRIES);
+  await setDoc(
+    aiSettingsRef(),
+    {
+      lastRetrainRequestedAt: Timestamp.now(),
+      activityLog: next,
+    },
+    { merge: true },
+  );
+}
+
 export async function createRoom(payload: {
   name: string;
   capacity: number;

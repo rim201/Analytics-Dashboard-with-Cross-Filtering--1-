@@ -2,8 +2,9 @@ import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { ArrowLeft, Users, Thermometer, Wind, Volume2, Sun, Droplets, Brain, Plus } from 'lucide-react';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
 import '../styles/custom.css';
+import { thresholdsForAggressiveness } from '../services/aiRecommendations';
 import { computeComfortScoreFromSensors } from '../services/comfortScore';
-import { getRoomById, listMeasurements, updateRoomLight, type MeasurementRow } from '../services/firestoreApi';
+import { getAiConfig, getRoomById, listMeasurements, updateRoomLight, type MeasurementRow } from '../services/firestoreApi';
 
 const LUX_MIN = 150;
 const LUX_MAX = 1000;
@@ -34,8 +35,15 @@ export default function RoomDetails({ roomId, onBack, isAdmin = false, onAddRoom
   const [dragLightLux, setDragLightLux] = useState<number | null>(null);
   const [lightSaving, setLightSaving] = useState(false);
   const [lightError, setLightError] = useState<string | null>(null);
+  const [aiAggressiveness, setAiAggressiveness] = useState(7);
 
   const numericRoomId = roomId?.replace(/^room-/, '') ?? '';
+
+  useEffect(() => {
+    void getAiConfig()
+      .then(({ settings }) => setAiAggressiveness(settings.aggressiveness))
+      .catch(() => undefined);
+  }, []);
 
   useEffect(() => {
     setDragLightLux(null);
@@ -167,6 +175,7 @@ export default function RoomDetails({ roomId, onBack, isAdmin = false, onAddRoom
   );
 
   const aiInsights = useMemo(() => {
+    const t = thresholdsForAggressiveness(aiAggressiveness);
     const messages: { title: string; text: string; tone: 'blue' | 'purple' | 'green' }[] = [];
     const name = roomMeta.name;
 
@@ -181,10 +190,10 @@ export default function RoomDetails({ roomId, onBack, isAdmin = false, onAddRoom
     }
 
     if (latest.co2 != null) {
-      if (latest.co2 > 650) {
+      if (latest.co2 > t.co2High) {
         messages.push({
           title: 'Air Quality Alert',
-          text: `${name}: CO₂ at ${Math.round(latest.co2)} ppm. Increasing ventilation to keep focus and comfort at optimal levels.`,
+          text: `${name}: CO₂ at ${Math.round(latest.co2)} ppm (above ~${Math.round(t.co2High)} ppm). Increasing ventilation to keep focus and comfort at optimal levels.`,
           tone: 'blue',
         });
       } else {
@@ -197,13 +206,13 @@ export default function RoomDetails({ roomId, onBack, isAdmin = false, onAddRoom
     }
 
     if (latest.temperature != null) {
-      if (latest.temperature > 23) {
+      if (latest.temperature > t.tempHigh) {
         messages.push({
           title: 'Cooling Optimization',
-          text: `${name}: Temperature at ${latest.temperature.toFixed(1)}°C. Targeting 22°C for better comfort/energy balance.`,
+          text: `${name}: Temperature at ${latest.temperature.toFixed(1)}°C. Targeting ~${t.tempHigh.toFixed(1)}°C for better comfort/energy balance.`,
           tone: 'purple',
         });
-      } else if (latest.temperature < 21) {
+      } else if (latest.temperature < t.tempLow) {
         messages.push({
           title: 'Heating Optimization',
           text: `${name}: Temperature at ${latest.temperature.toFixed(1)}°C. Slightly increasing HVAC output for comfort.`,
@@ -219,13 +228,13 @@ export default function RoomDetails({ roomId, onBack, isAdmin = false, onAddRoom
     }
 
     if (latest.light != null) {
-      if (latest.light > 520) {
+      if (latest.light > t.lightHigh) {
         messages.push({
           title: 'Lighting Adaptation',
           text: `${name}: High light intensity (${Math.round(latest.light)} lux). Dimming fixtures to reduce glare and save energy.`,
           tone: 'green',
         });
-      } else if (latest.light < 350) {
+      } else if (latest.light < t.lightLow) {
         messages.push({
           title: 'Lighting Boost',
           text: `${name}: Low light level (${Math.round(latest.light)} lux). Increasing brightness for visual comfort.`,
@@ -249,7 +258,7 @@ export default function RoomDetails({ roomId, onBack, isAdmin = false, onAddRoom
     }
 
     return messages.slice(0, 3);
-  }, [latest, roomMeta.name]);
+  }, [latest, roomMeta.name, aiAggressiveness]);
 
   const getSensorStatus = (value: number, thresholds: { good: number; warning: number }) => {
     if (value <= thresholds.good) return { color: 'emerald', label: 'Good' };

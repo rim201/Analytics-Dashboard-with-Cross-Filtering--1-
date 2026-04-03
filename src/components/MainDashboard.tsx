@@ -2,7 +2,8 @@ import { Thermometer, Wind, Volume2, Sun, Star, TrendingUp, TrendingDown, Brain 
 import { LineChart, Line, AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
 import React, { useEffect, useState } from 'react';
 import { PageType } from '../App';
-import { fetchDashboardSummary } from '../services/firestoreApi';
+import { buildAiRecommendationsFromRooms, type AiDashboardRec } from '../services/aiRecommendations';
+import { fetchDashboardSummary, getAiConfig, listRoomsWithLatestMeasurements } from '../services/firestoreApi';
 
 interface MainDashboardProps {
   onNavigate: (page: PageType) => void;
@@ -25,10 +26,12 @@ export default function MainDashboard({ onNavigate }: MainDashboardProps) {
     noiseData: [] as { time: string; value: number }[],
     roomOverview: { total: 0, available: 0, occupied: 0, maintenance: 0 },
   });
+  const [aiRecs, setAiRecs] = useState<AiDashboardRec[]>([]);
+  const [aiAutoApply, setAiAutoApply] = useState(false);
 
   useEffect(() => {
-    fetchDashboardSummary()
-      .then((data) => {
+    Promise.all([fetchDashboardSummary(), getAiConfig(), listRoomsWithLatestMeasurements()])
+      .then(([data, ai, rooms]) => {
         setSummary({
           comfortScore: data.comfortScore ?? 0,
           temperature: data.temperature ?? 0,
@@ -41,6 +44,19 @@ export default function MainDashboard({ onNavigate }: MainDashboardProps) {
           noiseData: data.noiseData ?? [],
           roomOverview: data.roomOverview || { total: 0, available: 0, occupied: 0, maintenance: 0 },
         });
+        setAiAutoApply(ai.settings.autoApplyRecommendations);
+        setAiRecs(
+          buildAiRecommendationsFromRooms(
+            rooms.map((r) => ({
+              name: r.name,
+              temperature: r.temperature,
+              co2: r.co2,
+              light: r.light,
+            })),
+            ai.settings.aggressiveness,
+            6,
+          ),
+        );
       })
       .catch(() => undefined);
   }, []);
@@ -233,38 +249,52 @@ export default function MainDashboard({ onNavigate }: MainDashboardProps) {
 
       {/* AI Recommendations Panel */}
       <div className="bg-gradient-to-br from-emerald-50 to-blue-50 rounded-2xl p-6 border border-emerald-200/50">
-        <div className="flex items-start justify-between">
-          <div className="flex items-start space-x-4">
+        <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+          <div className="flex items-start space-x-4 min-w-0 flex-1">
             <div className="w-12 h-12 bg-gradient-to-br from-emerald-400 to-emerald-600 rounded-xl flex items-center justify-center flex-shrink-0">
               <Brain className="w-6 h-6 text-white" />
             </div>
-            <div className="flex-1">
-              <h3 className="text-lg font-semibold text-gray-900 mb-2">AI Recommendations</h3>
+            <div className="flex-1 min-w-0">
+              <h3 className="text-lg font-semibold text-gray-900 mb-1">AI Recommendations</h3>
+              <p className="text-xs text-gray-500 mb-2">
+                Suggestions basées sur les dernières mesures par salle (seuils réglables dans Settings → AI Config).
+              </p>
+              {!aiAutoApply ? (
+                <p className="text-xs text-amber-800 bg-amber-100/80 border border-amber-200 rounded-lg px-2 py-1.5 mb-2">
+                  Auto-apply is off in Settings → AI Config; suggestions below are for manual review only.
+                </p>
+              ) : null}
               <div className="space-y-2">
-                <div className="flex items-start space-x-2">
-                  <div className="w-1.5 h-1.5 bg-emerald-500 rounded-full mt-2"></div>
-                  <p className="text-sm text-gray-700">
-                    <span className="font-medium">Conference Room A:</span> Reduce temperature by 1°C to optimize energy consumption while maintaining comfort.
+                {aiRecs.length === 0 ? (
+                  <p className="text-sm text-gray-600">
+                    No sensor-based suggestions yet. Add measurements to rooms (or lower aggressiveness in AI Config) to see
+                    recommendations here.
                   </p>
-                </div>
-                <div className="flex items-start space-x-2">
-                  <div className="w-1.5 h-1.5 bg-blue-500 rounded-full mt-2"></div>
-                  <p className="text-sm text-gray-700">
-                    <span className="font-medium">Meeting Room B:</span> Increase ventilation to reduce CO₂ levels from 720 ppm to below 600 ppm.
-                  </p>
-                </div>
-                <div className="flex items-start space-x-2">
-                  <div className="w-1.5 h-1.5 bg-amber-500 rounded-full mt-2"></div>
-                  <p className="text-sm text-gray-700">
-                    <span className="font-medium">Executive Suite:</span> Adjust lighting intensity to 500 lux based on occupancy patterns.
-                  </p>
-                </div>
+                ) : (
+                  aiRecs.map((rec, i) => (
+                    <div key={`${rec.roomName}-${i}`} className="flex items-start space-x-2">
+                      <div
+                        className={`w-1.5 h-1.5 rounded-full mt-2 shrink-0 ${
+                          rec.tone === 'emerald'
+                            ? 'bg-emerald-500'
+                            : rec.tone === 'blue'
+                              ? 'bg-blue-500'
+                              : 'bg-amber-500'
+                        }`}
+                      />
+                      <p className="text-sm text-gray-700">
+                        <span className="font-medium">{rec.roomName}:</span> {rec.text}
+                      </p>
+                    </div>
+                  ))
+                )}
               </div>
             </div>
           </div>
           <button
+            type="button"
             onClick={() => onNavigate('rooms')}
-            className="px-4 py-2 bg-white text-emerald-600 rounded-xl font-medium hover:bg-emerald-50 transition shadow-sm"
+            className="px-4 py-2 bg-white text-emerald-600 rounded-xl font-medium hover:bg-emerald-50 transition shadow-sm shrink-0 self-start"
           >
             View Rooms
           </button>
