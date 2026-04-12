@@ -1013,6 +1013,77 @@ export async function createRoom(payload: {
   return roomRef.id;
 }
 
+/** ID du document `devices` associé à cette salle (au plus un, convention UI). */
+export async function getLinkedDeviceDocIdForRoom(roomId: string): Promise<string | undefined> {
+  const snap = await getDocs(query(collection(db, 'devices'), where('roomId', '==', roomId), limit(1)));
+  if (snap.empty) return undefined;
+  return snap.docs[0]?.id;
+}
+
+/**
+ * Met à jour nom, capacité, occupation et appareil lié.
+ * Refusé si la salle est encore occupée au moment de l’appel.
+ */
+export async function updateRoom(
+  roomId: string,
+  payload: {
+    name: string;
+    capacity: number;
+    occupancy: number;
+    /** Document `devices` à rattacher ; vide = aucun appareil sur cette salle. */
+    existingDeviceId?: string;
+  },
+): Promise<void> {
+  const room = await getRoomById(roomId);
+  if (!room) {
+    throw new Error('Salle introuvable.');
+  }
+  if (room.occupancy > 0) {
+    throw new Error('Impossible de modifier une salle tant qu’elle est occupée.');
+  }
+
+  const name = payload.name.trim();
+  if (!name) {
+    throw new Error('Nom requis.');
+  }
+
+  const capacity = Number(payload.capacity);
+  if (!Number.isFinite(capacity) || capacity < 1) {
+    throw new Error('Capacité invalide.');
+  }
+
+  const occupancy = Number(payload.occupancy);
+  if (!Number.isFinite(occupancy) || occupancy < 0 || occupancy > capacity) {
+    throw new Error("Occupation invalide (0 à capacité).");
+  }
+
+  await updateDoc(doc(db, 'rooms', roomId), {
+    name,
+    capacity,
+    occupancy,
+    updatedAt: Timestamp.now(),
+  });
+
+  const newDeviceId = (payload.existingDeviceId ?? '').trim();
+  const snapLinked = await getDocs(query(collection(db, 'devices'), where('roomId', '==', roomId)));
+
+  for (const d of snapLinked.docs) {
+    if (d.id !== newDeviceId) {
+      await updateDoc(d.ref, {
+        roomId: '',
+        lastUpdate: Timestamp.now(),
+      });
+    }
+  }
+
+  if (newDeviceId) {
+    await updateDoc(doc(db, 'devices', newDeviceId), {
+      roomId: roomId,
+      lastUpdate: Timestamp.now(),
+    });
+  }
+}
+
 async function deleteMeasurementsBatch(roomId: string) {
   const snap = await getDocs(collection(db, 'rooms', roomId, 'measurements'));
   let batch = writeBatch(db);

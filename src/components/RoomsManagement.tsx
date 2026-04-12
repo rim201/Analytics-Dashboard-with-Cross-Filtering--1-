@@ -1,11 +1,13 @@
-import { Search, Filter, Users, Thermometer, Wind, Volume2, Sun, Plus, Trash2, Droplets } from 'lucide-react';
+import { Search, Filter, Users, Thermometer, Wind, Volume2, Sun, Plus, Trash2, Droplets, Pencil } from 'lucide-react';
 import React, { useEffect, useRef, useState } from 'react';
 import {
   createRoom,
   deleteRoom,
+  getLinkedDeviceDocIdForRoom,
   listDevices,
   listRooms,
   listRoomsWithLatestMeasurements,
+  updateRoom,
   type DeviceRecord,
   type RoomListRow,
 } from '../services/firestoreApi';
@@ -31,9 +33,15 @@ export default function RoomsManagement({ onRoomSelect, isAdmin = false }: Rooms
   const [addForm, setAddForm] = useState(defaultAddForm);
   const [addFormErrors, setAddFormErrors] = useState<Record<string, string>>({});
   const [addRoomSubmitting, setAddRoomSubmitting] = useState(false);
+  const [editRoomId, setEditRoomId] = useState<string | null>(null);
+  const [editForm, setEditForm] = useState(defaultAddForm);
+  const [editFormErrors, setEditFormErrors] = useState<Record<string, string>>({});
+  const [editRoomSubmitting, setEditRoomSubmitting] = useState(false);
+  const [editLinkedLoading, setEditLinkedLoading] = useState(false);
   const [iotDevicesPicker, setIotDevicesPicker] = useState<DeviceRecord[]>([]);
   const [iotPickerLoaded, setIotPickerLoaded] = useState(false);
   const addFormRef = useRef<HTMLDivElement>(null);
+  const editFormRef = useRef<HTMLDivElement>(null);
 
   const fetchRooms = async () => {
     try {
@@ -56,12 +64,24 @@ export default function RoomsManagement({ onRoomSelect, isAdmin = false }: Rooms
   }, [isAdmin, showAddRoomForm]);
 
   useEffect(() => {
+    if (isAdmin || !editRoomId) return;
+    setEditRoomId(null);
+    setEditForm(defaultAddForm());
+    setEditFormErrors({});
+  }, [isAdmin, editRoomId]);
+
+  useEffect(() => {
     if (!showAddRoomForm) return;
     addFormRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
   }, [showAddRoomForm]);
 
   useEffect(() => {
-    if (!showAddRoomForm) {
+    if (!editRoomId) return;
+    editFormRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }, [editRoomId]);
+
+  useEffect(() => {
+    if (!showAddRoomForm && !editRoomId) {
       setIotPickerLoaded(false);
       return;
     }
@@ -84,20 +104,47 @@ export default function RoomsManagement({ onRoomSelect, isAdmin = false }: Rooms
     return () => {
       cancelled = true;
     };
-  }, [showAddRoomForm]);
+  }, [showAddRoomForm, editRoomId]);
 
   useEffect(() => {
-    if (!showAddRoomForm) return;
+    if (!editRoomId) {
+      setEditLinkedLoading(false);
+      return;
+    }
+    let cancelled = false;
+    setEditLinkedLoading(true);
+    void (async () => {
+      try {
+        const linked = await getLinkedDeviceDocIdForRoom(editRoomId);
+        if (!cancelled) {
+          setEditForm((f) => ({ ...f, linkedDeviceId: linked ?? '' }));
+        }
+      } catch {
+        if (!cancelled) setEditForm((f) => ({ ...f, linkedDeviceId: '' }));
+      } finally {
+        if (!cancelled) setEditLinkedLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [editRoomId]);
+
+  useEffect(() => {
+    if (!showAddRoomForm && !editRoomId) return;
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape' && !addRoomSubmitting) {
+      if (e.key === 'Escape' && !addRoomSubmitting && !editRoomSubmitting) {
         setShowAddRoomForm(false);
         setAddForm(defaultAddForm());
         setAddFormErrors({});
+        setEditRoomId(null);
+        setEditForm(defaultAddForm());
+        setEditFormErrors({});
       }
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [showAddRoomForm, addRoomSubmitting]);
+  }, [showAddRoomForm, editRoomId, addRoomSubmitting, editRoomSubmitting]);
 
   const filteredRooms = rooms.filter((room) => {
     const matchesSearch = room.name.toLowerCase().includes(searchQuery.toLowerCase());
@@ -139,6 +186,27 @@ export default function RoomsManagement({ onRoomSelect, isAdmin = false }: Rooms
     return Object.keys(err).length === 0;
   };
 
+  const validateEditForm = () => {
+    const err: Record<string, string> = {};
+    const name = editForm.name.trim();
+    if (!name) err.name = 'Nom requis.';
+
+    const capacity = parseInt(editForm.capacity, 10);
+    if (Number.isNaN(capacity) || capacity < 1) {
+      err.capacity = 'Capacité ≥ 1 requise.';
+    }
+
+    const occupancy = parseInt(editForm.occupancy, 10);
+    if (Number.isNaN(occupancy) || occupancy < 0) {
+      err.occupancy = 'Nombre entier ≥ 0.';
+    } else if (!Number.isNaN(capacity) && occupancy > capacity) {
+      err.occupancy = "Ne peut pas dépasser la capacité.";
+    }
+
+    setEditFormErrors(err);
+    return Object.keys(err).length === 0;
+  };
+
   const handleSubmitAddRoom = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!isAdmin) return;
@@ -173,6 +241,40 @@ export default function RoomsManagement({ onRoomSelect, isAdmin = false }: Rooms
     }
   };
 
+  const handleSubmitEditRoom = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!isAdmin || !editRoomId) return;
+    if (!validateEditForm()) return;
+
+    const capacity = parseInt(editForm.capacity, 10);
+    const occupancy = parseInt(editForm.occupancy, 10);
+    const linkedId = editForm.linkedDeviceId.trim();
+
+    setEditRoomSubmitting(true);
+    try {
+      await updateRoom(editRoomId, {
+        name: editForm.name.trim(),
+        capacity,
+        occupancy,
+        existingDeviceId: linkedId || undefined,
+      });
+      await fetchRooms();
+      const linked = linkedId ? iotDevicesPicker.find((d) => d.id === linkedId) : undefined;
+      setRoomActionMessage(
+        linked
+          ? `Salle mise à jour. L’appareil « ${linked.name} » est associé à cette salle.`
+          : 'Salle mise à jour.',
+      );
+      setEditRoomId(null);
+      setEditForm(defaultAddForm());
+      setEditFormErrors({});
+    } catch (error) {
+      setRoomActionMessage(`Échec : ${error instanceof Error ? error.message : String(error)}`);
+    } finally {
+      setEditRoomSubmitting(false);
+    }
+  };
+
   const handleDeleteRoom = async (room: RoomListRow) => {
     const ok = window.confirm(
       `Supprimer la salle « ${room.name} » ?\n\nCette action est irréversible. Cliquez sur OK pour supprimer, ou Annuler pour ne rien faire.`,
@@ -204,6 +306,9 @@ export default function RoomsManagement({ onRoomSelect, isAdmin = false }: Rooms
             <button
               type="button"
               onClick={() => {
+                setEditRoomId(null);
+                setEditForm(defaultAddForm());
+                setEditFormErrors({});
                 if (showAddRoomForm) {
                   setShowAddRoomForm(false);
                   setAddForm(defaultAddForm());
@@ -355,6 +460,139 @@ export default function RoomsManagement({ onRoomSelect, isAdmin = false }: Rooms
         </div>
       )}
 
+      {isAdmin && editRoomId && (
+        <div
+          ref={editFormRef}
+          className="bg-white rounded-2xl shadow-lg border-2 border-blue-200"
+          role="region"
+          aria-labelledby="edit-room-title"
+        >
+          <div className="flex items-center justify-between border-b border-gray-100 px-6 py-4 rounded-t-2xl bg-blue-50">
+            <h3 id="edit-room-title" className="text-lg font-semibold text-gray-900">
+              Modifier la salle
+            </h3>
+            <button
+              type="button"
+              disabled={editRoomSubmitting}
+              onClick={() => {
+                setEditRoomId(null);
+                setEditForm(defaultAddForm());
+                setEditFormErrors({});
+              }}
+              className="text-gray-500 hover:text-gray-700 text-xl leading-none px-2 disabled:opacity-50"
+              aria-label="Fermer le formulaire"
+            >
+              ×
+            </button>
+          </div>
+
+          <form onSubmit={handleSubmitEditRoom} className="px-6 py-4 space-y-4">
+            <p className="text-sm text-gray-600">
+              La modification n’est possible que lorsque la salle n’est pas occupée (occupation à 0).
+            </p>
+            <div>
+              <label htmlFor="edit-room-name" className="block text-sm font-medium text-gray-700 mb-1">
+                Nom de la salle <span className="text-red-500">*</span>
+              </label>
+              <input
+                id="edit-room-name"
+                type="text"
+                autoComplete="off"
+                value={editForm.name}
+                onChange={(e) => setEditForm((f) => ({ ...f, name: e.target.value }))}
+                className="w-full px-3 py-2 border border-gray-300 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none"
+              />
+              {editFormErrors.name && <p className="mt-1 text-sm text-red-600">{editFormErrors.name}</p>}
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <div>
+                <label htmlFor="edit-room-capacity" className="block text-sm font-medium text-gray-700 mb-1">
+                  Capacité (places) <span className="text-red-500">*</span>
+                </label>
+                <input
+                  id="edit-room-capacity"
+                  type="number"
+                  min={1}
+                  value={editForm.capacity}
+                  onChange={(e) => setEditForm((f) => ({ ...f, capacity: e.target.value }))}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none"
+                />
+                {editFormErrors.capacity && (
+                  <p className="mt-1 text-sm text-red-600">{editFormErrors.capacity}</p>
+                )}
+              </div>
+              <div>
+                <label htmlFor="edit-room-occupancy" className="block text-sm font-medium text-gray-700 mb-1">
+                  Occupation actuelle
+                </label>
+                <input
+                  id="edit-room-occupancy"
+                  type="number"
+                  min={0}
+                  value={editForm.occupancy}
+                  onChange={(e) => setEditForm((f) => ({ ...f, occupancy: e.target.value }))}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none"
+                />
+                {editFormErrors.occupancy && (
+                  <p className="mt-1 text-sm text-red-600">{editFormErrors.occupancy}</p>
+                )}
+              </div>
+            </div>
+
+            <div className="pt-2 border-t border-gray-100">
+              <label htmlFor="edit-room-linked-device" className="block text-sm font-medium text-gray-900 mb-1">
+                Appareil IoT (optionnel)
+              </label>
+              <p className="text-xs text-gray-500 mb-2">
+                {editLinkedLoading ? 'Chargement de l’association actuelle…' : 'Choisissez un appareil ou aucun.'}
+              </p>
+              <select
+                id="edit-room-linked-device"
+                disabled={editLinkedLoading}
+                value={editForm.linkedDeviceId}
+                onChange={(e) => setEditForm((f) => ({ ...f, linkedDeviceId: e.target.value }))}
+                className="w-full px-3 py-2 border border-gray-300 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none bg-white disabled:opacity-60"
+              >
+                <option value="">— Aucun appareil —</option>
+                {iotDevicesPicker.map((d) => (
+                  <option key={d.id} value={d.id}>
+                    {d.ipAddress ?? d.name} · Salle : {d.room}
+                  </option>
+                ))}
+              </select>
+              {iotPickerLoaded && iotDevicesPicker.length === 0 && (
+                <p className="mt-2 text-xs text-amber-700">
+                  Aucun appareil dans Firestore. Ajoutez-en dans Paramètres → IoT Devices Management.
+                </p>
+              )}
+            </div>
+
+            <div className="flex flex-col-reverse sm:flex-row gap-2 sm:justify-end pt-4 border-t border-gray-100">
+              <button
+                type="button"
+                disabled={editRoomSubmitting}
+                onClick={() => {
+                  setEditRoomId(null);
+                  setEditForm(defaultAddForm());
+                  setEditFormErrors({});
+                }}
+                className="px-4 py-2 rounded-xl border border-gray-300 text-gray-700 font-medium hover:bg-gray-50 disabled:opacity-50"
+              >
+                Annuler
+              </button>
+              <button
+                type="submit"
+                disabled={editRoomSubmitting || editLinkedLoading}
+                className="px-4 py-2 rounded-xl bg-emerald-500 text-white font-medium shadow-sm hover:bg-emerald-600 disabled:opacity-50"
+              >
+                {editRoomSubmitting ? 'Enregistrement…' : 'Enregistrer les modifications'}
+              </button>
+            </div>
+          </form>
+        </div>
+      )}
+
       {roomActionMessage && (
         <div className="text-sm px-3 py-2 rounded-lg border border-gray-200 bg-white text-gray-700">
           {roomActionMessage}
@@ -489,10 +727,49 @@ export default function RoomsManagement({ onRoomSelect, isAdmin = false }: Rooms
             </div>
 
             {/* Action Buttons */}
-            <div className="p-4 bg-gray-50 border-t border-gray-100 flex gap-2">
-              <button className="flex-1 px-4 py-2 bg-emerald-500 text-white rounded-xl font-medium hover:bg-emerald-600 transition">
+            <div className="p-4 bg-gray-50 border-t border-gray-100 flex flex-wrap gap-2">
+              <button
+                type="button"
+                className="flex-1 min-w-[8rem] px-4 py-2 bg-emerald-500 text-white rounded-xl font-medium hover:bg-emerald-600 transition"
+              >
                 View Details
               </button>
+              {isAdmin &&
+                (room.occupancy > 0 ? (
+                  <button
+                    type="button"
+                    disabled
+                    title="Modifier ou supprimer : disponible uniquement lorsque la salle n’est pas occupée."
+                    onClick={(e) => e.stopPropagation()}
+                    className="px-4 py-2 bg-gray-100 text-gray-400 border border-gray-200 rounded-xl font-medium cursor-not-allowed flex items-center justify-center gap-2"
+                    aria-label="Modifier indisponible : salle occupée"
+                  >
+                    <Pencil className="w-4 h-4" />
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    title="Modifier la salle"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setShowAddRoomForm(false);
+                      setAddForm(defaultAddForm());
+                      setAddFormErrors({});
+                      setEditRoomId(room.id);
+                      setEditForm({
+                        name: room.name,
+                        capacity: String(room.capacity),
+                        occupancy: String(room.occupancy),
+                        linkedDeviceId: '',
+                      });
+                      setEditFormErrors({});
+                    }}
+                    className="px-4 py-2 bg-blue-50 text-blue-700 border border-blue-200 rounded-xl font-medium hover:bg-blue-100 transition flex items-center justify-center gap-2"
+                    aria-label={`Modifier la salle ${room.name}`}
+                  >
+                    <Pencil className="w-4 h-4" />
+                  </button>
+                ))}
               {isAdmin &&
                 (room.occupancy > 0 ? (
                   <button
