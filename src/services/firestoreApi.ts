@@ -114,6 +114,11 @@ export type DeviceRecord = {
   roomId: string;
   status: 'online' | 'offline' | 'error';
   lastUpdate: string;
+  /** Adresse IP du Raspberry (SSH / déploiement manuel). */
+  ipAddress?: string;
+  sshUser?: string;
+  sshPort?: number;
+  lastSensorPush?: string;
 };
 
 export type DashboardSummary = {
@@ -623,8 +628,14 @@ export async function appendRoomMeasurementSnapshot(
   });
 }
 
-/** Ajoute pour chaque salle un point reprenant la dernière mesure connue (ou champs null si aucune). */
-export async function appendCurrentSnapshotsForAllRooms(): Promise<number> {
+/**
+ * Pour **chaque salle** : enregistre un point de mesure (dernières valeurs Firestore ou null).
+ * Puis signale **tous** les documents `devices` ayant un `roomId` pour une capture capteurs immédiate sur Raspberry.
+ */
+export async function appendCurrentSnapshotsForAllRooms(): Promise<{
+  snapshots: number;
+  devicesSignaled: number;
+}> {
   const rooms = await listRooms();
   const t = Timestamp.now();
   let n = 0;
@@ -639,7 +650,29 @@ export async function appendCurrentSnapshotsForAllRooms(): Promise<number> {
     });
     n++;
   }
-  return n;
+  const devicesSignaled = await signalAllAssignedDevicesSensorCapture();
+  return { snapshots: n, devicesSignaled };
+}
+
+/** Demande aux Raspberry (documents \`devices\` liés à une salle) d’envoyer une mesure dès que possible. */
+export async function signalAllAssignedDevicesSensorCapture(): Promise<number> {
+  const snap = await getDocs(collection(db, 'devices'));
+  const now = Timestamp.now();
+  let count = 0;
+  for (const d of snap.docs) {
+    const roomId = String(d.data().roomId ?? '').trim();
+    if (!roomId) continue;
+    await updateDoc(d.ref, { sensorCaptureRequestedAt: now, lastUpdate: now });
+    count++;
+  }
+  return count;
+}
+
+export async function signalDeviceSensorCaptureNow(deviceId: string): Promise<void> {
+  await updateDoc(doc(db, 'devices', deviceId), {
+    sensorCaptureRequestedAt: Timestamp.now(),
+    lastUpdate: Timestamp.now(),
+  });
 }
 
 /** Compte les mesures dont `timestamp` est dans [start, end] (bornes inclusives). */
@@ -1253,6 +1286,7 @@ export async function listDevices(roomNames: Map<string, string>): Promise<Devic
   return snap.docs.map((d) => {
     const x = d.data();
     const roomId = String(x.roomId ?? '');
+    const sshPort = Number(x.sshPort);
     return {
       id: d.id,
       name: String(x.name ?? ''),
@@ -1261,6 +1295,10 @@ export async function listDevices(roomNames: Map<string, string>): Promise<Devic
       room: roomNames.get(roomId) ?? '—',
       status: (x.status as DeviceRecord['status']) || 'online',
       lastUpdate: formatLastUpdate(x.lastUpdate as Timestamp | undefined),
+      ipAddress: typeof x.ipAddress === 'string' && x.ipAddress.trim() ? x.ipAddress.trim() : undefined,
+      sshUser: typeof x.sshUser === 'string' && x.sshUser.trim() ? x.sshUser.trim() : undefined,
+      sshPort: Number.isFinite(sshPort) && sshPort > 0 ? sshPort : undefined,
+      lastSensorPush: formatLastUpdate(x.lastSensorPushAt as Timestamp | undefined),
     };
   });
 }
@@ -1269,26 +1307,45 @@ export async function createDevice(data: {
   name: string;
   deviceId: string;
   status: string;
+  ipAddress?: string;
+  sshUser?: string;
+  sshPort?: number;
 }): Promise<void> {
+  const port = typeof data.sshPort === 'number' && data.sshPort > 0 ? data.sshPort : 22;
   await addDoc(collection(db, 'devices'), {
     name: data.name,
     deviceUid: data.deviceId,
     roomId: '',
     status: data.status,
     lastUpdate: Timestamp.now(),
+    ipAddress: (data.ipAddress ?? '').trim(),
+    sshUser: (data.sshUser ?? 'pi').trim() || 'pi',
+    sshPort: port,
   });
 }
 
 export async function updateDevice(
   deviceId: string,
-  data: { name: string; deviceId: string; roomId: string; status: string },
+  data: {
+    name: string;
+    deviceId: string;
+    roomId: string;
+    status: string;
+    ipAddress?: string;
+    sshUser?: string;
+    sshPort?: number;
+  },
 ): Promise<void> {
+  const port = typeof data.sshPort === 'number' && data.sshPort > 0 ? data.sshPort : 22;
   await updateDoc(doc(db, 'devices', deviceId), {
     name: data.name,
     deviceUid: data.deviceId,
     roomId: data.roomId,
     status: data.status,
     lastUpdate: Timestamp.now(),
+    ipAddress: (data.ipAddress ?? '').trim(),
+    sshUser: (data.sshUser ?? 'pi').trim() || 'pi',
+    sshPort: port,
   });
 }
 

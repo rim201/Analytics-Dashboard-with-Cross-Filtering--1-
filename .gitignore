@@ -1,1 +1,3 @@
 node_modules
+# Clé compte de service Firebase (déploiement Pi — ne jamais commiter)
+scripts/pi/serviceAccountKey.json

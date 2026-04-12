@@ -13,11 +13,13 @@ import {
   Camera,
   Database,
   FileText,
+  Rocket,
 } from 'lucide-react';
 import React, { useEffect, useState } from 'react';
 import {
   appendCurrentSnapshotsForAllRooms,
   appendAiActivityLog,
+  signalDeviceSensorCaptureNow,
   createDevice,
   DEFAULT_RETENTION_WEEKS,
   deleteDevice,
@@ -40,6 +42,8 @@ import {
   type DeviceRecord,
   type UserRecord,
 } from '../services/firestoreApi';
+import { buildDeploySh } from '../services/piProvisioning';
+import { fetchServiceAccountJsonFromRemoteConfig, REMOTE_CONFIG_SERVICE_ACCOUNT_PARAM } from '../services/remoteConfigPi';
 import {
   createUserWithProfile,
   createUserWithProfileErrorMessage,
@@ -75,7 +79,11 @@ export default function AdminSettings() {
     deviceId: '',
     roomId: '',
     status: 'online' as DeviceRecord['status'],
+    ipAddress: '',
+    sshUser: 'pi',
+    sshPort: '22',
   });
+  const [piActionBusyId, setPiActionBusyId] = useState<string | null>(null);
   const [toast, setToast] = useState<ToastState | null>(null);
   const [userErrors, setUserErrors] = useState<{ name?: string; email?: string; password?: string }>({});
   const [deviceErrors, setDeviceErrors] = useState<{ name?: string }>({});
@@ -101,6 +109,14 @@ export default function AdminSettings() {
   const showToast = (type: ToastState['type'], message: string) => {
     setToast({ type, message });
     setTimeout(() => setToast(null), 3000);
+  };
+
+  const downloadTextFile = (filename: string, content: string, mime = 'text/plain;charset=utf-8') => {
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(new Blob([content], { type: mime }));
+    a.download = filename;
+    a.click();
+    URL.revokeObjectURL(a.href);
   };
 
   const reloadAll = async () => {
@@ -302,6 +318,9 @@ export default function AdminSettings() {
       deviceId: '',
       roomId: '',
       status: 'online',
+      ipAddress: '',
+      sshUser: 'pi',
+      sshPort: '22',
     });
     setDeviceErrors({});
     setDeviceModalOpen(true);
@@ -316,6 +335,9 @@ export default function AdminSettings() {
       deviceId: device.deviceId || '',
       roomId: String(device.roomId || ''),
       status: device.status,
+      ipAddress: device.ipAddress ?? '',
+      sshUser: device.sshUser ?? 'pi',
+      sshPort: String(device.sshPort ?? 22),
     });
     setDeviceErrors({});
     setDeviceModalOpen(true);
@@ -328,18 +350,26 @@ export default function AdminSettings() {
     setDeviceErrors(errors);
     if (Object.keys(errors).length > 0) return;
     try {
+      const sshPort = parseInt(deviceForm.sshPort, 10);
+      const ipPayload = {
+        ipAddress: deviceForm.ipAddress.trim(),
+        sshUser: deviceForm.sshUser.trim() || 'pi',
+        sshPort: Number.isFinite(sshPort) && sshPort > 0 ? sshPort : 22,
+      };
       if (editingDevice) {
         await updateDevice(editingDevice.id, {
           name: deviceForm.name,
           deviceId: deviceForm.deviceId.trim(),
           roomId: deviceForm.roomId,
           status: deviceForm.status,
+          ...ipPayload,
         });
       } else {
         await createDevice({
           name: deviceForm.name,
           deviceId: deviceForm.deviceId.trim(),
           status: deviceForm.status,
+          ...ipPayload,
         });
       }
       setDeviceModalOpen(false);
@@ -354,12 +384,51 @@ export default function AdminSettings() {
   const handleAppendSnapshotsAllRooms = async () => {
     setMeasureBusy(true);
     try {
-      const n = await appendCurrentSnapshotsForAllRooms();
-      showToast('success', `${n} série(s) de mesures enregistrée(s) (date + temp., humidité, CO₂, bruit, lumière).`);
+      const { snapshots, devicesSignaled } = await appendCurrentSnapshotsForAllRooms();
+      showToast(
+        'success',
+        `Toutes les salles (${snapshots}) : snapshot enregistré. ${devicesSignaled} Raspberry (IoT lié à une salle) notifié(s) pour envoi capteurs.`,
+      );
     } catch {
       showToast('error', 'Impossible d’enregistrer les mesures.');
     } finally {
       setMeasureBusy(false);
+    }
+  };
+
+  const downloadDeployScriptForDevice = async (device: DeviceRecord) => {
+    if (!device.roomId?.trim()) {
+      showToast('error', 'Associez d’abord cet appareil à une salle pour générer le script.');
+      return;
+    }
+    const params = { deviceDocId: device.id, roomId: device.roomId };
+    const safe = device.name.replace(/[^\w.-]+/g, '-').slice(0, 40) || 'device';
+    let embedded: string | null = null;
+    try {
+      embedded = await fetchServiceAccountJsonFromRemoteConfig();
+    } catch {
+      showToast('error', 'Remote Config indisponible (réseau ou Firebase).');
+      return;
+    }
+    const script = buildDeploySh(params, { embeddedServiceAccountJson: embedded });
+    downloadTextFile(`deploy-room-sensor-${safe}.sh`, script, 'text/x-shellscript;charset=utf-8');
+    showToast(
+      'success',
+      embedded
+        ? 'Script téléchargé (clé Remote Config). Suivez les étapes 4 à 7 du bandeau (chmod, port SSH si besoin, puis commande avec VOTRE_IP).'
+        : `Script sans clé intégrée : étape 1 du bandeau (Remote Config « ${REMOTE_CONFIG_SERVICE_ACCOUNT_PARAM} ») ou étape 8 (fichier JSON en argument).`,
+    );
+  };
+
+  const handleSignalPiCapture = async (device: DeviceRecord) => {
+    setPiActionBusyId(device.id);
+    try {
+      await signalDeviceSensorCaptureNow(device.id);
+      showToast('success', 'Signal « capture maintenant » envoyé à cet appareil.');
+    } catch {
+      showToast('error', 'Impossible d’envoyer le signal.');
+    } finally {
+      setPiActionBusyId(null);
     }
   };
 
@@ -780,6 +849,69 @@ export default function AdminSettings() {
 
       {activeTab === 'devices' && (
         <div className="bg-white rounded-2xl shadow-lg border border-gray-100 overflow-hidden">
+          <div className="p-4 border-b border-amber-100 bg-amber-50/90 text-sm text-amber-950">
+            <p className="font-semibold text-amber-950">Déploiement Raspberry Pi — à suivre dans l’ordre</p>
+            <ol className="mt-3 list-none space-y-1.5 pl-0 font-normal text-amber-950/95">
+              <li className="flex gap-2 rounded-md py-1 pl-0 pr-1 hover:bg-amber-100/40">
+                <span className="w-6 shrink-0 font-semibold text-amber-900">1.</span>
+                <span>
+                  <strong>Firebase</strong> → <strong>Remote Config</strong> → paramètre{' '}
+                  <code className="rounded bg-white/80 px-1 py-0.5">{REMOTE_CONFIG_SERVICE_ACCOUNT_PARAM}</code> = JSON <strong>complet</strong> du
+                  compte de service, puis <strong>Publier</strong> (sinon étape 8).
+                </span>
+              </li>
+              <li className="flex gap-2 rounded-md py-1 pl-0 pr-1 hover:bg-amber-100/40">
+                <span className="w-6 shrink-0 font-semibold text-amber-900">2.</span>
+                <span>
+                  Renseignez l’<strong>IP</strong> du Raspberry dans le tableau (colonne <strong>IP / SSH</strong>) — repère ; l’IP réelle du déploiement
+                  est celle saisie à l’étape 6.
+                </span>
+              </li>
+              <li className="flex gap-2 rounded-md py-1 pl-0 pr-1 hover:bg-amber-100/40">
+                <span className="w-6 shrink-0 font-semibold text-amber-900">3.</span>
+                <span>
+                  Cliquez sur la <strong>fusée</strong> : téléchargement de{' '}
+                  <code className="rounded bg-white/80 px-1 py-0.5">deploy-room-sensor-….sh</code> (clé lue depuis Remote Config au clic).
+                </span>
+              </li>
+              <li className="flex gap-2 rounded-md py-1 pl-0 pr-1 hover:bg-amber-100/40">
+                <span className="w-6 shrink-0 font-semibold text-amber-900">4.</span>
+                <span>
+                  Terminal sur le PC (Git Bash, WSL, macOS, Linux), dossier du fichier :{' '}
+                  <code className="rounded bg-white/80 px-1 py-0.5">chmod +x deploy-room-sensor-….sh</code>
+                </span>
+              </li>
+              <li className="flex gap-2 rounded-md py-1 pl-0 pr-1 hover:bg-amber-100/40">
+                <span className="w-6 shrink-0 font-semibold text-amber-900">5.</span>
+                <span>
+                  Si le port SSH n’est pas 22 : <code className="rounded bg-white/80 px-1 py-0.5">export DEPLOY_SSH_PORT=VOTRE_PORT</code> puis
+                  l’étape 6.
+                </span>
+              </li>
+              <li className="flex gap-2 rounded-md py-1 pl-0 pr-1 hover:bg-amber-100/40">
+                <span className="w-6 shrink-0 font-semibold text-amber-900">6.</span>
+                <span>
+                  <code className="rounded bg-white/80 px-1 py-0.5">./deploy-room-sensor-….sh VOTRE_IP</code> — remplacez{' '}
+                  <code className="rounded bg-white/80 px-0.5">VOTRE_IP</code> par l’IP du Pi ; si l’utilisateur SSH n’est pas{' '}
+                  <code className="rounded bg-white/80 px-0.5">pi</code>, ajoutez-le en 2ᵉ argument :{' '}
+                  <code className="rounded bg-white/80 px-1 py-0.5">./deploy-room-sensor-….sh VOTRE_IP monuser</code>.
+                </span>
+              </li>
+              <li className="flex gap-2 rounded-md py-1 pl-0 pr-1 hover:bg-amber-100/40">
+                <span className="w-6 shrink-0 font-semibold text-amber-900">7.</span>
+                <span>
+                  Si l’étape 1 est correcte : le script se termine sur le Pi (installation + service). Sinon passer à l’étape 8.
+                </span>
+              </li>
+              <li className="flex gap-2 rounded-md py-1 pl-0 pr-1 hover:bg-amber-100/40">
+                <span className="w-6 shrink-0 font-semibold text-amber-900">8.</span>
+                <span>
+                  Sans Remote Config valide :{' '}
+                  <code className="rounded bg-white/80 px-1 py-0.5">./deploy-room-sensor-….sh VOTRE_IP chemin/vers/serviceAccountKey.json</code>
+                </span>
+              </li>
+            </ol>
+          </div>
           <div className="p-6 border-b border-gray-100 flex items-center justify-between">
             <h3 className="font-semibold text-gray-900">IoT Devices Management</h3>
             <button
@@ -821,6 +953,35 @@ export default function AdminSettings() {
                     (Rooms).
                   </p>
                 )}
+                <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+                  <div>
+                    <label className="mb-1 block text-sm text-gray-600">IP (Raspberry)</label>
+                    <input
+                      value={deviceForm.ipAddress}
+                      onChange={(e) => setDeviceForm((p) => ({ ...p, ipAddress: e.target.value }))}
+                      placeholder="IP locale du Raspberry"
+                      className="w-full rounded-xl border border-gray-300 px-3 py-2 font-mono text-sm outline-none focus:ring-2 focus:ring-emerald-500"
+                    />
+                  </div>
+                  <div>
+                    <label className="mb-1 block text-sm text-gray-600">Utilisateur SSH</label>
+                    <input
+                      value={deviceForm.sshUser}
+                      onChange={(e) => setDeviceForm((p) => ({ ...p, sshUser: e.target.value }))}
+                      className="w-full rounded-xl border border-gray-300 px-3 py-2 outline-none focus:ring-2 focus:ring-emerald-500"
+                    />
+                  </div>
+                  <div>
+                    <label className="mb-1 block text-sm text-gray-600">Port SSH</label>
+                    <input
+                      type="number"
+                      min={1}
+                      value={deviceForm.sshPort}
+                      onChange={(e) => setDeviceForm((p) => ({ ...p, sshPort: e.target.value }))}
+                      className="w-full rounded-xl border border-gray-300 px-3 py-2 outline-none focus:ring-2 focus:ring-emerald-500"
+                    />
+                  </div>
+                </div>
                 {editingDevice ? (
                   <div className="grid grid-cols-2 gap-3">
                     <div>
@@ -900,9 +1061,10 @@ export default function AdminSettings() {
                 <tr>
                   <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Device</th>
                   <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Device ID</th>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">IP / SSH</th>
                   <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Room</th>
                   <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Status</th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Last Update</th>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Dernière màj</th>
                   <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Actions</th>
                 </tr>
               </thead>
@@ -918,15 +1080,47 @@ export default function AdminSettings() {
                     <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-600 font-mono text-xs">
                       {device.deviceId || '—'}
                     </td>
+                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-600 font-mono text-xs">
+                      {device.ipAddress ? (
+                        <>
+                          {device.ipAddress}
+                          <span className="text-gray-400">
+                            :{device.sshPort ?? 22} ({device.sshUser ?? 'pi'})
+                          </span>
+                        </>
+                      ) : (
+                        '—'
+                      )}
+                    </td>
                     <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-600">{device.room}</td>
                     <td className="px-6 py-4 whitespace-nowrap">
                       <span className={`px-3 py-1 rounded-lg text-xs font-medium border capitalize ${getStatusColor(device.status)}`}>
                         {device.status}
                       </span>
                     </td>
-                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{device.lastUpdate}</td>
+                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                      <div>{device.lastUpdate}</div>
+                      <div className="text-xs text-gray-400">Capteurs: {device.lastSensorPush || '—'}</div>
+                    </td>
                     <td className="px-6 py-4 whitespace-nowrap text-sm">
-                      <div className="flex items-center space-x-2">
+                      <div className="flex flex-wrap items-center gap-1">
+                        <button
+                          type="button"
+                          title="Script déploiement (1 fichier : scp + install depuis votre PC)"
+                          onClick={() => void downloadDeployScriptForDevice(device)}
+                          className="p-2 text-violet-600 hover:bg-violet-50 rounded-lg transition"
+                        >
+                          <Rocket className="w-4 h-4" />
+                        </button>
+                        <button
+                          type="button"
+                          title="Capture capteurs maintenant"
+                          disabled={piActionBusyId === device.id}
+                          onClick={() => void handleSignalPiCapture(device)}
+                          className="p-2 text-amber-600 hover:bg-amber-50 rounded-lg transition disabled:opacity-50"
+                        >
+                          <Camera className="w-4 h-4" />
+                        </button>
                         <button onClick={() => openEditDeviceModal(device)} className="p-2 text-blue-600 hover:bg-blue-50 rounded-lg transition">
                           <Edit className="w-4 h-4" />
                         </button>
@@ -950,8 +1144,10 @@ export default function AdminSettings() {
             <p className="mt-2 text-sm text-gray-600 max-w-3xl">
               Gérez l’historique des capteurs (température, humidité, CO₂, bruit, lumière). Les courbes et les dernières
               valeurs se consultent dans le détail de chaque salle.{' '}
-              <strong className="font-medium text-gray-800">Capturer l’état actuel</strong> ajoute pour chaque salle un
-              point daté du moment du clic, en reprenant la dernière mesure connue (ou des valeurs vides).
+              <strong className="font-medium text-gray-800">Capturer l’état actuel (toutes les salles)</strong> : une
+              mesure est enregistrée pour <strong>chaque salle</strong> (dernières valeurs Firestore), et{' '}
+              <strong>tous</strong> les appareils IoT <strong>associés à une salle</strong> reçoivent un signal pour pousser
+              immédiatement une lecture capteurs (agent sur Raspberry).
             </p>
             <div className="mt-4">
               <button
