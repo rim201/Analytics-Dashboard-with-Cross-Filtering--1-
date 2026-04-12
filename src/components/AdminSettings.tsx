@@ -42,7 +42,7 @@ import {
   type DeviceRecord,
   type UserRecord,
 } from '../services/firestoreApi';
-import { buildDeploySh } from '../services/piProvisioning';
+import { buildDeploySh, deployScriptFilenameFromIp } from '../services/piProvisioning';
 import { fetchServiceAccountJsonFromRemoteConfig, REMOTE_CONFIG_SERVICE_ACCOUNT_PARAM } from '../services/remoteConfigPi';
 import {
   createUserWithProfile,
@@ -75,8 +75,6 @@ export default function AdminSettings() {
     status: 'active' as UserRecord['status'],
   });
   const [deviceForm, setDeviceForm] = useState({
-    name: '',
-    deviceId: '',
     roomId: '',
     status: 'online' as DeviceRecord['status'],
     ipAddress: '',
@@ -86,7 +84,7 @@ export default function AdminSettings() {
   const [piActionBusyId, setPiActionBusyId] = useState<string | null>(null);
   const [toast, setToast] = useState<ToastState | null>(null);
   const [userErrors, setUserErrors] = useState<{ name?: string; email?: string; password?: string }>({});
-  const [deviceErrors, setDeviceErrors] = useState<{ name?: string }>({});
+  const [deviceErrors, setDeviceErrors] = useState<{ ipAddress?: string }>({});
   const [measureRoomId, setMeasureRoomId] = useState('');
   const [measureDateFrom, setMeasureDateFrom] = useState('');
   const [measureDateTo, setMeasureDateTo] = useState('');
@@ -314,8 +312,6 @@ export default function AdminSettings() {
     setEditingUser(null);
     setEditingDevice(null);
     setDeviceForm({
-      name: '',
-      deviceId: '',
       roomId: '',
       status: 'online',
       ipAddress: '',
@@ -331,8 +327,6 @@ export default function AdminSettings() {
     setEditingUser(null);
     setEditingDevice(device);
     setDeviceForm({
-      name: device.name,
-      deviceId: device.deviceId || '',
       roomId: String(device.roomId || ''),
       status: device.status,
       ipAddress: device.ipAddress ?? '',
@@ -345,8 +339,8 @@ export default function AdminSettings() {
 
   const submitDeviceForm = async (e: React.FormEvent) => {
     e.preventDefault();
-    const errors: { name?: string } = {};
-    if (!deviceForm.name.trim()) errors.name = 'Name is required.';
+    const errors: { ipAddress?: string } = {};
+    if (!deviceForm.ipAddress.trim()) errors.ipAddress = 'L’adresse IP du Raspberry est obligatoire.';
     setDeviceErrors(errors);
     if (Object.keys(errors).length > 0) return;
     try {
@@ -358,16 +352,12 @@ export default function AdminSettings() {
       };
       if (editingDevice) {
         await updateDevice(editingDevice.id, {
-          name: deviceForm.name,
-          deviceId: deviceForm.deviceId.trim(),
           roomId: deviceForm.roomId,
           status: deviceForm.status,
           ...ipPayload,
         });
       } else {
         await createDevice({
-          name: deviceForm.name,
-          deviceId: deviceForm.deviceId.trim(),
           status: deviceForm.status,
           ...ipPayload,
         });
@@ -376,8 +366,8 @@ export default function AdminSettings() {
       setEditingDevice(null);
       await reloadAll();
       showToast('success', editingDevice ? 'Device updated successfully.' : 'Device created successfully.');
-    } catch {
-      showToast('error', 'Failed to save device.');
+    } catch (err) {
+      showToast('error', err instanceof Error ? err.message : 'Failed to save device.');
     }
   };
 
@@ -401,8 +391,13 @@ export default function AdminSettings() {
       showToast('error', 'Associez d’abord cet appareil à une salle pour générer le script.');
       return;
     }
+    const ip = device.ipAddress?.trim();
+    if (!ip) {
+      showToast('error', 'Renseignez l’adresse IP de l’appareil (édition) avant de télécharger le script.');
+      return;
+    }
     const params = { deviceDocId: device.id, roomId: device.roomId };
-    const safe = device.name.replace(/[^\w.-]+/g, '-').slice(0, 40) || 'device';
+    const filename = deployScriptFilenameFromIp(ip);
     let embedded: string | null = null;
     try {
       embedded = await fetchServiceAccountJsonFromRemoteConfig();
@@ -411,7 +406,7 @@ export default function AdminSettings() {
       return;
     }
     const script = buildDeploySh(params, { embeddedServiceAccountJson: embedded });
-    downloadTextFile(`deploy-room-sensor-${safe}.sh`, script, 'text/x-shellscript;charset=utf-8');
+    downloadTextFile(filename, script, 'text/x-shellscript;charset=utf-8');
     showToast(
       'success',
       embedded
@@ -870,15 +865,16 @@ export default function AdminSettings() {
               <li className="flex gap-2 rounded-md py-1 pl-0 pr-1 hover:bg-amber-100/40">
                 <span className="w-6 shrink-0 font-semibold text-amber-900">3.</span>
                 <span>
-                  Cliquez sur la <strong>fusée</strong> : téléchargement de{' '}
-                  <code className="rounded bg-white/80 px-1 py-0.5">deploy-room-sensor-….sh</code> (clé lue depuis Remote Config au clic).
+                  Cliquez sur la <strong>fusée</strong> : téléchargement d’un fichier{' '}
+                  <code className="rounded bg-white/80 px-1 py-0.5">deploy-room-sensor-VOTRE_IP.sh</code> (remplacé par l’IP enregistrée sur
+                  l’appareil ; clé lue depuis Remote Config au clic).
                 </span>
               </li>
               <li className="flex gap-2 rounded-md py-1 pl-0 pr-1 hover:bg-amber-100/40">
                 <span className="w-6 shrink-0 font-semibold text-amber-900">4.</span>
                 <span>
-                  Terminal sur le PC (Git Bash, WSL, macOS, Linux), dossier du fichier :{' '}
-                  <code className="rounded bg-white/80 px-1 py-0.5">chmod +x deploy-room-sensor-….sh</code>
+                  Terminal sur le PC (Git Bash, WSL, macOS, Linux), dossier du fichier téléchargé :{' '}
+                  <code className="rounded bg-white/80 px-1 py-0.5">chmod +x deploy-room-sensor-VOTRE_IP.sh</code> (même nom qu’à l’étape 3).
                 </span>
               </li>
               <li className="flex gap-2 rounded-md py-1 pl-0 pr-1 hover:bg-amber-100/40">
@@ -891,10 +887,10 @@ export default function AdminSettings() {
               <li className="flex gap-2 rounded-md py-1 pl-0 pr-1 hover:bg-amber-100/40">
                 <span className="w-6 shrink-0 font-semibold text-amber-900">6.</span>
                 <span>
-                  <code className="rounded bg-white/80 px-1 py-0.5">./deploy-room-sensor-….sh VOTRE_IP</code> — remplacez{' '}
-                  <code className="rounded bg-white/80 px-0.5">VOTRE_IP</code> par l’IP du Pi ; si l’utilisateur SSH n’est pas{' '}
+                  <code className="rounded bg-white/80 px-1 py-0.5">./deploy-room-sensor-VOTRE_IP.sh VOTRE_IP</code> — même IP que dans le nom du
+                  fichier et sur la ligne de commande ; si l’utilisateur SSH n’est pas{' '}
                   <code className="rounded bg-white/80 px-0.5">pi</code>, ajoutez-le en 2ᵉ argument :{' '}
-                  <code className="rounded bg-white/80 px-1 py-0.5">./deploy-room-sensor-….sh VOTRE_IP monuser</code>.
+                  <code className="rounded bg-white/80 px-1 py-0.5">./deploy-room-sensor-VOTRE_IP.sh VOTRE_IP monuser</code>.
                 </span>
               </li>
               <li className="flex gap-2 rounded-md py-1 pl-0 pr-1 hover:bg-amber-100/40">
@@ -907,7 +903,9 @@ export default function AdminSettings() {
                 <span className="w-6 shrink-0 font-semibold text-amber-900">8.</span>
                 <span>
                   Sans Remote Config valide :{' '}
-                  <code className="rounded bg-white/80 px-1 py-0.5">./deploy-room-sensor-….sh VOTRE_IP chemin/vers/serviceAccountKey.json</code>
+                  <code className="rounded bg-white/80 px-1 py-0.5">
+                    ./deploy-room-sensor-VOTRE_IP.sh VOTRE_IP chemin/vers/serviceAccountKey.json
+                  </code>
                 </span>
               </li>
             </ol>
@@ -926,27 +924,8 @@ export default function AdminSettings() {
             <div className="border-b border-gray-200 bg-gray-50 px-6 py-5">
               <form onSubmit={submitDeviceForm} className="mx-auto max-w-2xl space-y-4">
                 <h3 className="text-lg font-semibold text-gray-900">
-                  {editingDevice ? 'Edit Device' : 'Add Device'}
+                  {editingDevice ? 'Modifier l’appareil' : 'Ajouter un appareil'}
                 </h3>
-                <div>
-                  <label className="mb-1 block text-sm text-gray-600">Name</label>
-                  <input
-                    value={deviceForm.name}
-                    onChange={(e) => setDeviceForm((p) => ({ ...p, name: e.target.value }))}
-                    className="w-full rounded-xl border border-gray-300 px-3 py-2 outline-none focus:ring-2 focus:ring-emerald-500"
-                    required
-                  />
-                  {deviceErrors.name && <p className="mt-1 text-xs text-red-600">{deviceErrors.name}</p>}
-                </div>
-                <div>
-                  <label className="mb-1 block text-sm text-gray-600">Device ID (hardware)</label>
-                  <input
-                    value={deviceForm.deviceId}
-                    onChange={(e) => setDeviceForm((p) => ({ ...p, deviceId: e.target.value }))}
-                    placeholder="Optional external ID"
-                    className="w-full rounded-xl border border-gray-300 px-3 py-2 font-mono text-sm outline-none focus:ring-2 focus:ring-emerald-500"
-                  />
-                </div>
                 {!editingDevice && (
                   <p className="text-xs text-gray-500">
                     La salle apparaîtra dans le tableau une fois l’appareil associé depuis la création d’une salle
@@ -955,13 +934,15 @@ export default function AdminSettings() {
                 )}
                 <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
                   <div>
-                    <label className="mb-1 block text-sm text-gray-600">IP (Raspberry)</label>
+                    <label className="mb-1 block text-sm text-gray-600">IP (Raspberry) — obligatoire</label>
                     <input
                       value={deviceForm.ipAddress}
                       onChange={(e) => setDeviceForm((p) => ({ ...p, ipAddress: e.target.value }))}
-                      placeholder="IP locale du Raspberry"
+                      placeholder="Ex. 10.0.0.5"
+                      required
                       className="w-full rounded-xl border border-gray-300 px-3 py-2 font-mono text-sm outline-none focus:ring-2 focus:ring-emerald-500"
                     />
+                    {deviceErrors.ipAddress && <p className="mt-1 text-xs text-red-600">{deviceErrors.ipAddress}</p>}
                   </div>
                   <div>
                     <label className="mb-1 block text-sm text-gray-600">Utilisateur SSH</label>
@@ -1059,8 +1040,6 @@ export default function AdminSettings() {
             <table className="w-full">
               <thead className="bg-gray-50">
                 <tr>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Device</th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Device ID</th>
                   <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">IP / SSH</th>
                   <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Room</th>
                   <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Status</th>
@@ -1071,26 +1050,20 @@ export default function AdminSettings() {
               <tbody className="divide-y divide-gray-100">
                 {devices.map((device) => (
                   <tr key={device.id} className="hover:bg-gray-50">
-                    <td className="px-6 py-4 whitespace-nowrap">
-                      <div className="flex items-center">
-                        <Wifi className="w-5 h-5 text-gray-400 mr-3" />
-                        <div className="text-sm font-medium text-gray-900">{device.name}</div>
-                      </div>
-                    </td>
-                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-600 font-mono text-xs">
-                      {device.deviceId || '—'}
-                    </td>
-                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-600 font-mono text-xs">
-                      {device.ipAddress ? (
-                        <>
-                          {device.ipAddress}
-                          <span className="text-gray-400">
-                            :{device.sshPort ?? 22} ({device.sshUser ?? 'pi'})
+                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-800 font-mono text-xs">
+                      <div className="flex items-center gap-2">
+                        <Wifi className="h-5 w-5 shrink-0 text-gray-400" aria-hidden />
+                        {device.ipAddress ? (
+                          <span>
+                            {device.ipAddress}
+                            <span className="text-gray-500">
+                              :{device.sshPort ?? 22} ({device.sshUser ?? 'pi'})
+                            </span>
                           </span>
-                        </>
-                      ) : (
-                        '—'
-                      )}
+                        ) : (
+                          '—'
+                        )}
+                      </div>
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-600">{device.room}</td>
                     <td className="px-6 py-4 whitespace-nowrap">
@@ -1106,9 +1079,16 @@ export default function AdminSettings() {
                       <div className="flex flex-wrap items-center gap-1">
                         <button
                           type="button"
-                          title="Script déploiement (1 fichier : scp + install depuis votre PC)"
+                          title={
+                            !device.roomId?.trim()
+                              ? 'Associez d’abord une salle à l’appareil'
+                              : !device.ipAddress?.trim()
+                                ? 'Renseignez l’IP du Raspberry (édition) pour télécharger le script'
+                                : 'Télécharger le script de déploiement (nom de fichier = IP)'
+                          }
+                          disabled={!device.roomId?.trim() || !device.ipAddress?.trim()}
                           onClick={() => void downloadDeployScriptForDevice(device)}
-                          className="p-2 text-violet-600 hover:bg-violet-50 rounded-lg transition"
+                          className="p-2 text-violet-600 hover:bg-violet-50 rounded-lg transition disabled:opacity-40 disabled:pointer-events-none"
                         >
                           <Rocket className="w-4 h-4" />
                         </button>

@@ -319,8 +319,7 @@ export default function RoomsManagement({ onRoomSelect, isAdmin = false }: Rooms
                 <option value="">— Aucun appareil —</option>
                 {iotDevicesPicker.map((d) => (
                   <option key={d.id} value={d.id}>
-                    {d.name}
-                    {d.deviceId ? ` · ${d.deviceId}` : ''} · Salle actuelle : {d.room}
+                    {d.ipAddress ?? d.name} · Salle : {d.room}
                   </option>
                 ))}
               </select>

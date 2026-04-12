@@ -215,6 +215,16 @@ ${endMarker}
 `;
 }
 
+/** Nom du fichier `.sh` téléchargé : basé sur l’IP (plus le nom de l’appareil). */
+export function deployScriptFilenameFromIp(ip: string): string {
+  const t = ip.trim();
+  const safe = t
+    .replace(/:/g, '-')
+    .replace(/[/\\:*?"<>|]/g, '_')
+    .replace(/\s+/g, '');
+  return `deploy-room-sensor-${safe || 'unknown'}.sh`;
+}
+
 export type BuildDeployShOptions = {
   /** JSON compte de service Firebase : le script n’exige plus le fichier clé en argument. */
   embeddedServiceAccountJson?: string | null;

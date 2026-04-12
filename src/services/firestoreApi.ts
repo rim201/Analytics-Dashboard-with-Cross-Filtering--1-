@@ -1282,8 +1282,8 @@ export async function deleteUser(userId: string): Promise<void> {
 // —— Devices —— //
 
 export async function listDevices(roomNames: Map<string, string>): Promise<DeviceRecord[]> {
-  const snap = await getDocs(query(collection(db, 'devices'), orderBy('name')));
-  return snap.docs.map((d) => {
+  const snap = await getDocs(collection(db, 'devices'));
+  const rows = snap.docs.map((d) => {
     const x = d.data();
     const roomId = String(x.roomId ?? '');
     const sshPort = Number(x.sshPort);
@@ -1301,24 +1301,27 @@ export async function listDevices(roomNames: Map<string, string>): Promise<Devic
       lastSensorPush: formatLastUpdate(x.lastSensorPushAt as Timestamp | undefined),
     };
   });
+  return rows.sort((a, b) =>
+    (a.ipAddress ?? '').localeCompare(b.ipAddress ?? '', undefined, { numeric: true, sensitivity: 'base' }),
+  );
 }
 
 export async function createDevice(data: {
-  name: string;
-  deviceId: string;
   status: string;
-  ipAddress?: string;
+  ipAddress: string;
   sshUser?: string;
   sshPort?: number;
 }): Promise<void> {
+  const ip = (data.ipAddress ?? '').trim();
+  if (!ip) throw new Error('L’adresse IP du Raspberry est obligatoire.');
   const port = typeof data.sshPort === 'number' && data.sshPort > 0 ? data.sshPort : 22;
   await addDoc(collection(db, 'devices'), {
-    name: data.name,
-    deviceUid: data.deviceId,
+    name: ip,
+    deviceUid: '',
     roomId: '',
     status: data.status,
     lastUpdate: Timestamp.now(),
-    ipAddress: (data.ipAddress ?? '').trim(),
+    ipAddress: ip,
     sshUser: (data.sshUser ?? 'pi').trim() || 'pi',
     sshPort: port,
   });
@@ -1327,23 +1330,23 @@ export async function createDevice(data: {
 export async function updateDevice(
   deviceId: string,
   data: {
-    name: string;
-    deviceId: string;
     roomId: string;
     status: string;
-    ipAddress?: string;
+    ipAddress: string;
     sshUser?: string;
     sshPort?: number;
   },
 ): Promise<void> {
+  const ip = (data.ipAddress ?? '').trim();
+  if (!ip) throw new Error('L’adresse IP du Raspberry est obligatoire.');
   const port = typeof data.sshPort === 'number' && data.sshPort > 0 ? data.sshPort : 22;
   await updateDoc(doc(db, 'devices', deviceId), {
-    name: data.name,
-    deviceUid: data.deviceId,
+    name: ip,
+    deviceUid: '',
     roomId: data.roomId,
     status: data.status,
     lastUpdate: Timestamp.now(),
-    ipAddress: (data.ipAddress ?? '').trim(),
+    ipAddress: ip,
     sshUser: (data.sshUser ?? 'pi').trim() || 'pi',
     sshPort: port,
   });
@@ -1367,7 +1370,8 @@ export async function seedFirestoreIfEmpty(): Promise<boolean> {
     { name: 'Innovation Lab', capacity: 10, occupancy: 0 },
   ];
 
-  for (const r of roomSeeds) {
+  for (let idx = 0; idx < roomSeeds.length; idx++) {
+    const r = roomSeeds[idx]!;
     const ref = await addDoc(collection(db, 'rooms'), {
       name: r.name,
       capacity: r.capacity,
@@ -1386,12 +1390,16 @@ export async function seedFirestoreIfEmpty(): Promise<boolean> {
       });
     }
 
+    const seedIp = `192.0.2.${10 + idx}`;
     await addDoc(collection(db, 'devices'), {
-      name: `Gateway ${r.name}`,
-      deviceUid: `IOT-SEED-${ref.id.slice(0, 8)}`,
+      name: seedIp,
+      deviceUid: '',
       roomId: ref.id,
       status: r.occupancy > 0 ? 'online' : 'offline',
       lastUpdate: Timestamp.now(),
+      ipAddress: seedIp,
+      sshUser: 'pi',
+      sshPort: 22,
     });
   }
 
