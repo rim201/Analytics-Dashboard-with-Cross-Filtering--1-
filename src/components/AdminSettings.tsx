@@ -43,6 +43,7 @@ import {
   type UserRecord,
 } from '../services/firestoreApi';
 import { buildDeploySh, deployScriptFilenameFromIp } from '../services/piProvisioning';
+import { validateDeviceIpAddress } from '../utils/deviceIpValidation';
 import { fetchServiceAccountJsonFromRemoteConfig, REMOTE_CONFIG_SERVICE_ACCOUNT_PARAM } from '../services/remoteConfigPi';
 import {
   createUserWithProfile,
@@ -84,7 +85,7 @@ export default function AdminSettings() {
   const [piActionBusyId, setPiActionBusyId] = useState<string | null>(null);
   const [toast, setToast] = useState<ToastState | null>(null);
   const [userErrors, setUserErrors] = useState<{ name?: string; email?: string; password?: string }>({});
-  const [deviceErrors, setDeviceErrors] = useState<{ ipAddress?: string }>({});
+  const [deviceFormError, setDeviceFormError] = useState<string | null>(null);
   const [measureRoomId, setMeasureRoomId] = useState('');
   const [measureDateFrom, setMeasureDateFrom] = useState('');
   const [measureDateTo, setMeasureDateTo] = useState('');
@@ -318,7 +319,7 @@ export default function AdminSettings() {
       sshUser: 'pi',
       sshPort: '22',
     });
-    setDeviceErrors({});
+    setDeviceFormError(null);
     setDeviceModalOpen(true);
   };
 
@@ -333,20 +334,22 @@ export default function AdminSettings() {
       sshUser: device.sshUser ?? 'pi',
       sshPort: String(device.sshPort ?? 22),
     });
-    setDeviceErrors({});
+    setDeviceFormError(null);
     setDeviceModalOpen(true);
   };
 
   const submitDeviceForm = async (e: React.FormEvent) => {
     e.preventDefault();
-    const errors: { ipAddress?: string } = {};
-    if (!deviceForm.ipAddress.trim()) errors.ipAddress = 'L’adresse IP du Raspberry est obligatoire.';
-    setDeviceErrors(errors);
-    if (Object.keys(errors).length > 0) return;
+    setDeviceFormError(null);
+    const ipCheck = validateDeviceIpAddress(deviceForm.ipAddress);
+    if (!ipCheck.ok) {
+      setDeviceFormError(ipCheck.message);
+      return;
+    }
     try {
       const sshPort = parseInt(deviceForm.sshPort, 10);
       const ipPayload = {
-        ipAddress: deviceForm.ipAddress.trim(),
+        ipAddress: ipCheck.normalized,
         sshUser: deviceForm.sshUser.trim() || 'pi',
         sshPort: Number.isFinite(sshPort) && sshPort > 0 ? sshPort : 22,
       };
@@ -359,15 +362,17 @@ export default function AdminSettings() {
       } else {
         await createDevice({
           status: deviceForm.status,
+          roomId: deviceForm.roomId,
           ...ipPayload,
         });
       }
+      setDeviceFormError(null);
       setDeviceModalOpen(false);
       setEditingDevice(null);
       await reloadAll();
       showToast('success', editingDevice ? 'Device updated successfully.' : 'Device created successfully.');
     } catch (err) {
-      showToast('error', err instanceof Error ? err.message : 'Failed to save device.');
+      setDeviceFormError(err instanceof Error ? err.message : 'Enregistrement impossible.');
     }
   };
 
@@ -923,13 +928,21 @@ export default function AdminSettings() {
           {deviceModalOpen && (
             <div className="border-b border-gray-200 bg-gray-50 px-6 py-5">
               <form onSubmit={submitDeviceForm} className="mx-auto max-w-2xl space-y-4">
+                {deviceFormError ? (
+                  <div
+                    role="alert"
+                    className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-900 shadow-sm"
+                  >
+                    {deviceFormError}
+                  </div>
+                ) : null}
                 <h3 className="text-lg font-semibold text-gray-900">
                   {editingDevice ? 'Modifier l’appareil' : 'Ajouter un appareil'}
                 </h3>
                 {!editingDevice && (
                   <p className="text-xs text-gray-500">
-                    La salle apparaîtra dans le tableau une fois l’appareil associé depuis la création d’une salle
-                    (Rooms).
+                    Vous pouvez associer une salle ci-dessous tout de suite, ou laisser « Non assigné » et la lier plus tard
+                    depuis Rooms.
                   </p>
                 )}
                 <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
@@ -937,18 +950,23 @@ export default function AdminSettings() {
                     <label className="mb-1 block text-sm text-gray-600">IP (Raspberry) — obligatoire</label>
                     <input
                       value={deviceForm.ipAddress}
-                      onChange={(e) => setDeviceForm((p) => ({ ...p, ipAddress: e.target.value }))}
+                      onChange={(e) => {
+                        setDeviceFormError(null);
+                        setDeviceForm((p) => ({ ...p, ipAddress: e.target.value }));
+                      }}
                       placeholder="Ex. 10.0.0.5"
                       required
                       className="w-full rounded-xl border border-gray-300 px-3 py-2 font-mono text-sm outline-none focus:ring-2 focus:ring-emerald-500"
                     />
-                    {deviceErrors.ipAddress && <p className="mt-1 text-xs text-red-600">{deviceErrors.ipAddress}</p>}
                   </div>
                   <div>
                     <label className="mb-1 block text-sm text-gray-600">Utilisateur SSH</label>
                     <input
                       value={deviceForm.sshUser}
-                      onChange={(e) => setDeviceForm((p) => ({ ...p, sshUser: e.target.value }))}
+                      onChange={(e) => {
+                        setDeviceFormError(null);
+                        setDeviceForm((p) => ({ ...p, sshUser: e.target.value }));
+                      }}
                       className="w-full rounded-xl border border-gray-300 px-3 py-2 outline-none focus:ring-2 focus:ring-emerald-500"
                     />
                   </div>
@@ -958,57 +976,44 @@ export default function AdminSettings() {
                       type="number"
                       min={1}
                       value={deviceForm.sshPort}
-                      onChange={(e) => setDeviceForm((p) => ({ ...p, sshPort: e.target.value }))}
+                      onChange={(e) => {
+                        setDeviceFormError(null);
+                        setDeviceForm((p) => ({ ...p, sshPort: e.target.value }));
+                      }}
                       className="w-full rounded-xl border border-gray-300 px-3 py-2 outline-none focus:ring-2 focus:ring-emerald-500"
                     />
                   </div>
                 </div>
-                {editingDevice ? (
-                  <div className="grid grid-cols-2 gap-3">
-                    <div>
-                      <label className="mb-1 block text-sm text-gray-600">Room</label>
-                      <select
-                        value={deviceForm.roomId}
-                        onChange={(e) => setDeviceForm((p) => ({ ...p, roomId: e.target.value }))}
-                        className="w-full rounded-xl border border-gray-300 px-3 py-2 outline-none focus:ring-2 focus:ring-emerald-500"
-                      >
-                        <option value="">— Non assigné —</option>
-                        {rooms.map((room) => (
-                          <option key={room.id} value={room.id}>
-                            {room.name}
-                          </option>
-                        ))}
-                      </select>
-                    </div>
-                    <div>
-                      <label className="mb-1 block text-sm text-gray-600">Status</label>
-                      <select
-                        value={deviceForm.status}
-                        onChange={(e) =>
-                          setDeviceForm((p) => ({
-                            ...p,
-                            status: e.target.value as DeviceRecord['status'],
-                          }))
-                        }
-                        className="w-full rounded-xl border border-gray-300 px-3 py-2 outline-none focus:ring-2 focus:ring-emerald-500"
-                      >
-                        <option value="online">online</option>
-                        <option value="offline">offline</option>
-                        <option value="error">error</option>
-                      </select>
-                    </div>
+                <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                  <div>
+                    <label className="mb-1 block text-sm text-gray-600">Salle (Room)</label>
+                    <select
+                      value={deviceForm.roomId}
+                      onChange={(e) => {
+                        setDeviceFormError(null);
+                        setDeviceForm((p) => ({ ...p, roomId: e.target.value }));
+                      }}
+                      className="w-full rounded-xl border border-gray-300 px-3 py-2 outline-none focus:ring-2 focus:ring-emerald-500"
+                    >
+                      <option value="">— Non assigné —</option>
+                      {rooms.map((room) => (
+                        <option key={room.id} value={room.id}>
+                          {room.name}
+                        </option>
+                      ))}
+                    </select>
                   </div>
-                ) : (
                   <div>
                     <label className="mb-1 block text-sm text-gray-600">Status</label>
                     <select
                       value={deviceForm.status}
-                      onChange={(e) =>
+                      onChange={(e) => {
+                        setDeviceFormError(null);
                         setDeviceForm((p) => ({
                           ...p,
                           status: e.target.value as DeviceRecord['status'],
-                        }))
-                      }
+                        }));
+                      }}
                       className="w-full rounded-xl border border-gray-300 px-3 py-2 outline-none focus:ring-2 focus:ring-emerald-500"
                     >
                       <option value="online">online</option>
@@ -1016,14 +1021,14 @@ export default function AdminSettings() {
                       <option value="error">error</option>
                     </select>
                   </div>
-                )}
+                </div>
                 <div className="flex justify-end gap-2 pt-2">
                   <button
                     type="button"
                     onClick={() => {
+                      setDeviceFormError(null);
                       setDeviceModalOpen(false);
                       setEditingDevice(null);
-                      setDeviceErrors({});
                     }}
                     className="rounded-xl border border-gray-300 px-4 py-2 text-gray-700 hover:bg-gray-50"
                   >

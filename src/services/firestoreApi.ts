@@ -18,6 +18,7 @@ import {
   type DocumentSnapshot,
 } from 'firebase/firestore';
 import { db } from '../firebase';
+import { validateDeviceIpAddress } from '../utils/deviceIpValidation';
 import type { AppRole } from './auth';
 import { computeComfortScoreFromSensors } from './comfortScore';
 
@@ -1306,19 +1307,60 @@ export async function listDevices(roomNames: Map<string, string>): Promise<Devic
   );
 }
 
+/**
+ * Une salle ne peut avoir qu’un seul appareil ; une IP ne peut correspondre qu’à un seul document `devices`.
+ * @param excludeDeviceDocId — document en cours d’édition (mise à jour), à exclure des contrôles.
+ */
+async function assertDeviceRoomAndIpExclusive(params: {
+  roomId: string;
+  ipAddress: string;
+  excludeDeviceDocId?: string;
+}): Promise<void> {
+  const rid = params.roomId.trim();
+  const ipValidation = validateDeviceIpAddress(params.ipAddress);
+  if (!ipValidation.ok) {
+    throw new Error(ipValidation.message);
+  }
+  const ip = ipValidation.normalized;
+
+  if (rid) {
+    const snapRoom = await getDocs(query(collection(db, 'devices'), where('roomId', '==', rid)));
+    for (const d of snapRoom.docs) {
+      if (d.id !== params.excludeDeviceDocId) {
+        throw new Error(
+          'Cette salle est déjà associée à un autre appareil IoT. Une salle = un seul appareil ; retirez l’association existante ou choisissez une autre salle.',
+        );
+      }
+    }
+  }
+
+  const snapIp = await getDocs(query(collection(db, 'devices'), where('ipAddress', '==', ip)));
+  for (const d of snapIp.docs) {
+    if (d.id !== params.excludeDeviceDocId) {
+      throw new Error(
+        'Cette adresse IP est déjà enregistrée pour un autre appareil. Un Raspberry = un seul enregistrement.',
+      );
+    }
+  }
+}
+
 export async function createDevice(data: {
   status: string;
   ipAddress: string;
+  roomId?: string;
   sshUser?: string;
   sshPort?: number;
 }): Promise<void> {
-  const ip = (data.ipAddress ?? '').trim();
-  if (!ip) throw new Error('L’adresse IP du Raspberry est obligatoire.');
+  const ipParsed = validateDeviceIpAddress(data.ipAddress ?? '');
+  if (!ipParsed.ok) throw new Error(ipParsed.message);
+  const ip = ipParsed.normalized;
   const port = typeof data.sshPort === 'number' && data.sshPort > 0 ? data.sshPort : 22;
+  const roomId = (data.roomId ?? '').trim();
+  await assertDeviceRoomAndIpExclusive({ roomId, ipAddress: ip });
   await addDoc(collection(db, 'devices'), {
     name: ip,
     deviceUid: '',
-    roomId: '',
+    roomId,
     status: data.status,
     lastUpdate: Timestamp.now(),
     ipAddress: ip,
@@ -1337,13 +1379,20 @@ export async function updateDevice(
     sshPort?: number;
   },
 ): Promise<void> {
-  const ip = (data.ipAddress ?? '').trim();
-  if (!ip) throw new Error('L’adresse IP du Raspberry est obligatoire.');
+  const ipParsed = validateDeviceIpAddress(data.ipAddress ?? '');
+  if (!ipParsed.ok) throw new Error(ipParsed.message);
+  const ip = ipParsed.normalized;
+  const roomId = (data.roomId ?? '').trim();
   const port = typeof data.sshPort === 'number' && data.sshPort > 0 ? data.sshPort : 22;
+  await assertDeviceRoomAndIpExclusive({
+    roomId,
+    ipAddress: ip,
+    excludeDeviceDocId: deviceId,
+  });
   await updateDoc(doc(db, 'devices', deviceId), {
     name: ip,
     deviceUid: '',
-    roomId: data.roomId,
+    roomId,
     status: data.status,
     lastUpdate: Timestamp.now(),
     ipAddress: ip,
