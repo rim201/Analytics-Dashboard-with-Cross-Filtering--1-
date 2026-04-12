@@ -4,31 +4,21 @@ import { signOutSession, roleLabel, type AppRole } from '../services/auth';
 import {
   alertApproveResolution,
   alertRejectResolution,
-  markInAppNotificationRead,
-  markInAppNotificationsReadMany,
   subscribeAlerts,
-  subscribeInAppNotificationsForUser,
   type AlertRow,
-  type InAppNotificationRow,
 } from '../services/firestoreApi';
 
 interface TopNavProps {
   displayName: string;
   email: string;
   role: AppRole;
-  isAdmin: boolean;
-  currentUserUid: string;
+  /** Admin + technicien : abonnement alertes et cloche. */
+  canAccessAlerts: boolean;
+  /** Accepter / refuser les demandes dans le panneau (admin uniquement). */
+  canModerateAlerts: boolean;
   onOpenAlertsPage: () => void;
   /** Panneau latéral contrôle éclairage (admin uniquement). */
   onOpenAdminLights?: () => void;
-}
-
-function formatNotifTime(iso: string): string {
-  try {
-    return new Date(iso).toLocaleString('fr-FR', { dateStyle: 'short', timeStyle: 'short' });
-  } catch {
-    return '';
-  }
 }
 
 function formatRequestTime(iso: string | undefined): string {
@@ -44,8 +34,8 @@ export default function TopNav({
   displayName,
   email,
   role,
-  isAdmin,
-  currentUserUid,
+  canAccessAlerts,
+  canModerateAlerts,
   onOpenAlertsPage,
 }: TopNavProps) {
   const today = new Date().toLocaleDateString('fr-FR', {
@@ -57,27 +47,17 @@ export default function TopNav({
 
   const [panelOpen, setPanelOpen] = useState(false);
   const [alerts, setAlerts] = useState<AlertRow[]>([]);
-  const [notifications, setNotifications] = useState<InAppNotificationRow[]>([]);
   const [actionId, setActionId] = useState<string | null>(null);
   const wrapRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    if (!isAdmin) {
+    if (!canAccessAlerts) {
       setAlerts([]);
       return;
     }
     const unsub = subscribeAlerts(setAlerts);
     return unsub;
-  }, [isAdmin]);
-
-  useEffect(() => {
-    if (isAdmin || !currentUserUid) {
-      setNotifications([]);
-      return;
-    }
-    const unsub = subscribeInAppNotificationsForUser(currentUserUid, setNotifications);
-    return unsub;
-  }, [isAdmin, currentUserUid]);
+  }, [canAccessAlerts]);
 
   useEffect(() => {
     if (!panelOpen) return;
@@ -90,18 +70,8 @@ export default function TopNav({
     return () => document.removeEventListener('mousedown', onDocClick);
   }, [panelOpen]);
 
-  /** À l’ouverture du panneau : marquer toutes les notifs comme lues → compteur repasse à 0. */
-  useEffect(() => {
-    if (!panelOpen || isAdmin) return;
-    const unread = notifications.filter((n) => !n.read);
-    if (unread.length === 0) return;
-    void markInAppNotificationsReadMany(unread.map((n) => n.id));
-  }, [panelOpen, isAdmin, notifications]);
-
   const pendingAlerts = alerts.filter((a) => a.status === 'pending');
-  const unreadCount = isAdmin
-    ? pendingAlerts.length
-    : notifications.filter((n) => !n.read).length;
+  const unreadCount = pendingAlerts.length;
 
   const handleApprove = async (alertId: string) => {
     setActionId(alertId);
@@ -121,18 +91,6 @@ export default function TopNav({
     }
   };
 
-  const handleNotifClick = async (n: InAppNotificationRow) => {
-    if (!n.read) {
-      try {
-        await markInAppNotificationRead(n.id);
-      } catch {
-        /* ignore */
-      }
-    }
-    onOpenAlertsPage();
-    setPanelOpen(false);
-  };
-
   return (
     <header className="bg-white border-b border-gray-200 px-6 py-4">
       <div className="flex items-center justify-between">
@@ -142,6 +100,7 @@ export default function TopNav({
         </div>
 
         <div className="flex items-center space-x-4">
+          {canAccessAlerts && (
           <div className="relative" ref={wrapRef}>
             <button
               type="button"
@@ -180,31 +139,31 @@ export default function TopNav({
                   </button>
                 </div>
                 <div className="overflow-y-auto flex-1 p-3 min-h-0 bg-white">
-                  {isAdmin ? (
-                    pendingAlerts.length === 0 ? (
-                      <div className="flex flex-col items-center justify-center py-16 px-6 text-center text-gray-600">
-                        <Inbox className="w-14 h-14 mb-3 text-gray-400" />
-                        <p className="text-base">Aucune notification.</p>
-                      </div>
-                    ) : (
-                      <ul className="space-y-3">
-                        {pendingAlerts.map((a) => {
-                          const busy = actionId === a.id;
-                          return (
-                            <li
-                              key={a.id}
-                              className="rounded-xl border border-violet-300 bg-violet-100 shadow-sm p-4 text-sm"
-                            >
-                              <p className="font-semibold text-gray-900 text-base line-clamp-2">{a.title}</p>
-                              <p className="text-sm text-gray-600 mt-1">{a.room}</p>
-                              {a.resolutionRequestedBy && (
-                                <p className="text-sm text-violet-900 mt-2">
-                                  Par <span className="font-semibold">{a.resolutionRequestedBy}</span>
-                                  {a.resolutionRequestedAt && (
-                                    <span className="text-gray-600"> · {formatRequestTime(a.resolutionRequestedAt)}</span>
-                                  )}
-                                </p>
-                              )}
+                  {pendingAlerts.length === 0 ? (
+                    <div className="flex flex-col items-center justify-center py-16 px-6 text-center text-gray-600">
+                      <Inbox className="w-14 h-14 mb-3 text-gray-400" />
+                      <p className="text-base">Aucune notification.</p>
+                    </div>
+                  ) : (
+                    <ul className="space-y-3">
+                      {pendingAlerts.map((a) => {
+                        const busy = actionId === a.id;
+                        return (
+                          <li
+                            key={a.id}
+                            className="rounded-xl border border-violet-300 bg-violet-100 shadow-sm p-4 text-sm"
+                          >
+                            <p className="font-semibold text-gray-900 text-base line-clamp-2">{a.title}</p>
+                            <p className="text-sm text-gray-600 mt-1">{a.room}</p>
+                            {a.resolutionRequestedBy && (
+                              <p className="text-sm text-violet-900 mt-2">
+                                Par <span className="font-semibold">{a.resolutionRequestedBy}</span>
+                                {a.resolutionRequestedAt && (
+                                  <span className="text-gray-600"> · {formatRequestTime(a.resolutionRequestedAt)}</span>
+                                )}
+                              </p>
+                            )}
+                            {canModerateAlerts ? (
                               <div className="flex gap-2 mt-3">
                                 <button
                                   type="button"
@@ -225,49 +184,21 @@ export default function TopNav({
                                   Refuser
                                 </button>
                               </div>
-                            </li>
-                          );
-                        })}
-                      </ul>
-                    )
-                  ) : notifications.length === 0 ? (
-                    <div className="flex flex-col items-center justify-center py-16 px-6 text-center text-gray-600">
-                      <Inbox className="w-14 h-14 mb-3 text-gray-400" />
-                      <p className="text-base">Aucune notification pour le moment.</p>
-                    </div>
-                  ) : (
-                    <ul className="space-y-2">
-                      {notifications.map((n) => (
-                        <li key={n.id}>
-                          <button
-                            type="button"
-                            onClick={() => void handleNotifClick(n)}
-                            className={`w-full text-left rounded-xl px-4 py-3.5 text-sm transition shadow-sm ${
-                              n.read
-                                ? 'bg-gray-200 text-gray-700 border border-gray-300'
-                                : 'bg-emerald-100 border border-emerald-300 text-gray-900'
-                            }`}
-                          >
-                            <p className="font-semibold text-base">
-                              {n.kind === 'alert_resolution_accepted'
-                                ? 'Demande acceptée'
-                                : 'Demande refusée'}
-                            </p>
-                            <p className="text-sm mt-1.5 leading-relaxed line-clamp-3">
-                              {n.kind === 'alert_resolution_accepted'
-                                ? `Votre demande pour « ${n.alertTitle} » a été acceptée. L’alerte est résolue.`
-                                : `Votre demande pour « ${n.alertTitle} » a été refusée. L’alerte est à nouveau ouverte.`}
-                            </p>
-                            <p className="text-xs text-gray-500 mt-2">{formatNotifTime(n.createdAt)}</p>
-                          </button>
-                        </li>
-                      ))}
+                            ) : (
+                              <p className="mt-3 text-xs text-violet-900 leading-snug">
+                                En attente de validation par un administrateur.
+                              </p>
+                            )}
+                          </li>
+                        );
+                      })}
                     </ul>
                   )}
                 </div>
               </div>
             )}
           </div>
+          )}
 
           <div className="flex items-center space-x-3 pl-4 border-l border-gray-200">
             <div className="w-10 h-10 bg-gradient-to-br from-emerald-400 to-blue-400 rounded-full flex items-center justify-center">

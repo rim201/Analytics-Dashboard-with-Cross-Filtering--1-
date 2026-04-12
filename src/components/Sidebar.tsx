@@ -5,18 +5,37 @@ interface SidebarProps {
   currentPage: PageType;
   onNavigate: (page: PageType) => void;
   isAdmin?: boolean;
+  /** Admin + technicien : entrée Alerts et cloche. */
+  canAccessAlerts?: boolean;
 }
 
-const allNavItems = [
-  { id: 'dashboard' as PageType, label: 'Dashboard', icon: LayoutDashboard, adminOnly: false },
-  { id: 'rooms' as PageType, label: 'Rooms', icon: DoorOpen, adminOnly: false },
-  { id: 'room-details' as PageType, label: 'Live Monitoring', icon: Radio, adminOnly: false },
-  { id: 'alerts' as PageType, label: 'Alerts', icon: Siren, adminOnly: false },
-  { id: 'settings' as PageType, label: 'Settings', icon: Settings, adminOnly: true },
+type NavItem = {
+  id: PageType;
+  label: string;
+  icon: typeof LayoutDashboard;
+  adminOnly: boolean;
+  staffAlertsOnly?: boolean;
+};
+
+const allNavItems: NavItem[] = [
+  { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard, adminOnly: false },
+  { id: 'rooms', label: 'Rooms', icon: DoorOpen, adminOnly: false },
+  { id: 'room-details', label: 'Live Monitoring', icon: Radio, adminOnly: false },
+  { id: 'alerts', label: 'Alerts', icon: Siren, adminOnly: false, staffAlertsOnly: true },
+  { id: 'settings', label: 'Settings', icon: Settings, adminOnly: true },
 ];
 
-export default function Sidebar({ currentPage, onNavigate, isAdmin = false }: SidebarProps) {
-  const navItems = allNavItems.filter((item) => !item.adminOnly || isAdmin);
+export default function Sidebar({
+  currentPage,
+  onNavigate,
+  isAdmin = false,
+  canAccessAlerts = false,
+}: SidebarProps) {
+  const navItems = allNavItems.filter((item) => {
+    if (item.adminOnly && !isAdmin) return false;
+    if (item.staffAlertsOnly && !canAccessAlerts) return false;
+    return true;
+  });
   return (
     <aside className="w-64 bg-white border-r border-gray-200 flex flex-col">
       {/* Logo */}

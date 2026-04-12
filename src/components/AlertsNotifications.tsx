@@ -26,14 +26,15 @@ function formatResolutionDate(iso: string | undefined): string {
 }
 
 interface AlertsNotificationsProps {
-  isAdmin?: boolean;
+  /** Admin uniquement : résolution directe, valider / refuser les demandes. */
+  canModerateAlerts?: boolean;
   currentUserName?: string;
   /** UID Firebase (obligatoire pour enregistrer une demande de résolution). */
   currentUserId: string;
 }
 
 export default function AlertsNotifications({
-  isAdmin = false,
+  canModerateAlerts = false,
   currentUserName = 'Utilisateur',
   currentUserId,
 }: AlertsNotificationsProps) {
@@ -130,7 +131,7 @@ export default function AlertsNotifications({
     setActionError(null);
     setActionAlertId(id);
     try {
-      if (isAdmin) {
+      if (canModerateAlerts) {
         await alertMarkDirectResolved(id, name);
       } else {
         await alertRequestResolution(id, name, currentUserId);
@@ -192,10 +193,12 @@ export default function AlertsNotifications({
               {warningCount} Warning
             </div>
           )}
-          {pendingApprovalCount > 0 && isAdmin && (
+          {pendingApprovalCount > 0 && (
             <div className="px-3 py-2 bg-violet-100 text-violet-800 rounded-xl border border-violet-200 text-sm font-medium flex items-center gap-1.5">
               <Clock className="w-4 h-4" />
-              {pendingApprovalCount} à valider
+              {canModerateAlerts
+                ? `${pendingApprovalCount} à valider`
+                : `${pendingApprovalCount} en attente de validation admin`}
             </div>
           )}
         </div>
@@ -412,10 +415,10 @@ export default function AlertsNotifications({
                           onClick={() => void handleMarkResolved(alert.id)}
                           className="px-4 py-2 bg-white text-gray-700 rounded-xl font-medium hover:bg-gray-50 transition shadow-sm border border-gray-200 disabled:opacity-50"
                         >
-                          {busy ? '…' : isAdmin ? 'Marquer résolu' : 'Demander résolution'}
+                          {busy ? '…' : canModerateAlerts ? 'Marquer résolu' : 'Demander résolution'}
                         </button>
                       )}
-                      {alert.status === 'pending' && isAdmin && (
+                      {alert.status === 'pending' && canModerateAlerts && (
                         <div className="flex flex-col sm:flex-row gap-2">
                           <button
                             type="button"
@@ -435,9 +438,9 @@ export default function AlertsNotifications({
                           </button>
                         </div>
                       )}
-                      {alert.status === 'pending' && !isAdmin && (
+                      {alert.status === 'pending' && !canModerateAlerts && (
                         <p className="text-xs text-violet-800 px-2 py-2 max-w-[220px] leading-snug">
-                          Votre demande a été enregistrée. Un administrateur doit valider pour clôturer l’alerte.
+                          En attente de validation par un administrateur.
                         </p>
                       )}
                     </div>

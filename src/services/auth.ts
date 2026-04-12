@@ -249,6 +249,16 @@ export function createUserWithProfileErrorMessage(err: unknown): string {
   return 'Impossible de créer ou mettre à jour l’utilisateur.';
 }
 
+/** Alertes, page Alerts et cloche (notifications staff). Réservé admin + technicien. */
+export function canAccessAlertsAndNotifications(role: AppRole | undefined): boolean {
+  return role === 'admin' || role === 'technicien';
+}
+
+/** Valider / refuser une demande, marquer résolu directement. Réservé à l’admin. */
+export function canModerateAlerts(role: AppRole | undefined): boolean {
+  return role === 'admin';
+}
+
 export function roleLabel(role: AppRole): string {
   switch (role) {
     case 'admin':

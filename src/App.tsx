@@ -14,6 +14,8 @@ import TopNav from './components/TopNav';
 import { auth } from './firebase';
 import {
   ACCOUNT_INACTIVE_LOGIN_MESSAGE,
+  canAccessAlertsAndNotifications,
+  canModerateAlerts,
   clearLoginNoticeStorage,
   ensureDefaultAdminUser,
   ensureProfileAfterLogin,
@@ -38,6 +40,8 @@ function App() {
   const [selectedRoomId, setSelectedRoomId] = useState<string | null>(null);
 
   const isAdmin = userProfile?.role === 'admin';
+  const canAccessAlerts = canAccessAlertsAndNotifications(userProfile?.role);
+  const canModerateAlertActions = canModerateAlerts(userProfile?.role);
 
   useEffect(() => {
     let unsub: (() => void) | undefined;
@@ -89,7 +93,7 @@ function App() {
   useEffect(() => {
     if (!userProfile || userProfile.mustChangePassword) return;
     void seedFirestoreIfEmpty();
-    void seedAlertsIfEmpty();
+    if (canAccessAlertsAndNotifications(userProfile.role)) void seedAlertsIfEmpty();
   }, [userProfile]);
 
   useEffect(() => {
@@ -103,8 +107,15 @@ function App() {
     }
   }, [currentPage, userProfile, isAdmin]);
 
+  useEffect(() => {
+    if (currentPage === 'alerts' && userProfile && !canAccessAlerts) {
+      setCurrentPage('dashboard');
+    }
+  }, [currentPage, userProfile, canAccessAlerts]);
+
   const handleNavigate = (page: PageType) => {
     if (page === 'settings' && !isAdmin) return;
+    if (page === 'alerts' && !canAccessAlerts) return;
     setCurrentPage(page);
   };
 
@@ -153,14 +164,19 @@ function App() {
 
   return (
     <div className="flex h-screen bg-gray-50">
-      <Sidebar currentPage={currentPage} onNavigate={handleNavigate} isAdmin={isAdmin} />
+      <Sidebar
+        currentPage={currentPage}
+        onNavigate={handleNavigate}
+        isAdmin={isAdmin}
+        canAccessAlerts={canAccessAlerts}
+      />
       <div className="flex-1 flex flex-col overflow-hidden">
         <TopNav
           displayName={userProfile.name}
           email={authUser.email ?? ''}
           role={userProfile.role}
-          isAdmin={isAdmin}
-          currentUserUid={authUser.uid}
+          canAccessAlerts={canAccessAlerts}
+          canModerateAlerts={canModerateAlertActions}
           onOpenAlertsPage={() => setCurrentPage('alerts')}
         />
         <main className="flex-1 overflow-y-auto p-6">
@@ -173,9 +189,9 @@ function App() {
               isAdmin={isAdmin}
             />
           )}
-          {currentPage === 'alerts' && (
+          {currentPage === 'alerts' && canAccessAlerts && (
             <AlertsNotifications
-              isAdmin={isAdmin}
+              canModerateAlerts={canModerateAlertActions}
               currentUserName={userProfile.name}
               currentUserId={authUser.uid}
             />
