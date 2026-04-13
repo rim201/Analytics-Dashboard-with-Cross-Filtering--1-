@@ -21,6 +21,7 @@ import {
   appendAiActivityLog,
   signalDeviceSensorCaptureNow,
   createDevice,
+  DEFAULT_DEVICE_SSH_USER,
   DEFAULT_RETENTION_WEEKS,
   deleteDevice,
   deleteRoomMeasurementsInRange,
@@ -79,7 +80,7 @@ export default function AdminSettings() {
     roomId: '',
     status: 'online' as DeviceRecord['status'],
     ipAddress: '',
-    sshUser: 'pi',
+    sshUser: DEFAULT_DEVICE_SSH_USER,
     sshPort: '22',
   });
   const [piActionBusyId, setPiActionBusyId] = useState<string | null>(null);
@@ -316,7 +317,7 @@ export default function AdminSettings() {
       roomId: '',
       status: 'online',
       ipAddress: '',
-      sshUser: 'pi',
+      sshUser: DEFAULT_DEVICE_SSH_USER,
       sshPort: '22',
     });
     setDeviceFormError(null);
@@ -331,7 +332,7 @@ export default function AdminSettings() {
       roomId: String(device.roomId || ''),
       status: device.status,
       ipAddress: device.ipAddress ?? '',
-      sshUser: device.sshUser ?? 'pi',
+      sshUser: device.sshUser ?? DEFAULT_DEVICE_SSH_USER,
       sshPort: String(device.sshPort ?? 22),
     });
     setDeviceFormError(null);
@@ -350,7 +351,7 @@ export default function AdminSettings() {
       const sshPort = parseInt(deviceForm.sshPort, 10);
       const ipPayload = {
         ipAddress: ipCheck.normalized,
-        sshUser: deviceForm.sshUser.trim() || 'pi',
+        sshUser: deviceForm.sshUser.trim() || DEFAULT_DEVICE_SSH_USER,
         sshPort: Number.isFinite(sshPort) && sshPort > 0 ? sshPort : 22,
       };
       if (editingDevice) {
@@ -894,7 +895,7 @@ export default function AdminSettings() {
                 <span>
                   <code className="rounded bg-white/80 px-1 py-0.5">./deploy-room-sensor-VOTRE_IP.sh VOTRE_IP</code> — même IP que dans le nom du
                   fichier et sur la ligne de commande ; si l’utilisateur SSH n’est pas{' '}
-                  <code className="rounded bg-white/80 px-0.5">pi</code>, ajoutez-le en 2ᵉ argument :{' '}
+                  <code className="rounded bg-white/80 px-0.5">{DEFAULT_DEVICE_SSH_USER}</code>, ajoutez-le en 2ᵉ argument :{' '}
                   <code className="rounded bg-white/80 px-1 py-0.5">./deploy-room-sensor-VOTRE_IP.sh VOTRE_IP monuser</code>.
                 </span>
               </li>
@@ -967,6 +968,7 @@ export default function AdminSettings() {
                         setDeviceFormError(null);
                         setDeviceForm((p) => ({ ...p, sshUser: e.target.value }));
                       }}
+                      placeholder={DEFAULT_DEVICE_SSH_USER}
                       className="w-full rounded-xl border border-gray-300 px-3 py-2 outline-none focus:ring-2 focus:ring-emerald-500"
                     />
                   </div>
@@ -1062,7 +1064,7 @@ export default function AdminSettings() {
                           <span>
                             {device.ipAddress}
                             <span className="text-gray-500">
-                              :{device.sshPort ?? 22} ({device.sshUser ?? 'pi'})
+                              :{device.sshPort ?? 22} ({device.sshUser ?? DEFAULT_DEVICE_SSH_USER})
                             </span>
                           </span>
                         ) : (

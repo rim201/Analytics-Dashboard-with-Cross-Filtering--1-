@@ -1353,6 +1353,9 @@ export async function deleteUser(userId: string): Promise<void> {
 
 // —— Devices —— //
 
+/** Utilisateur SSH par défaut pour les Raspberry de salle (connexion et formulaire admin). */
+export const DEFAULT_DEVICE_SSH_USER = 'pi';
+
 export async function listDevices(roomNames: Map<string, string>): Promise<DeviceRecord[]> {
   const snap = await getDocs(collection(db, 'devices'));
   const rows = snap.docs.map((d) => {
@@ -1435,7 +1438,7 @@ export async function createDevice(data: {
     status: data.status,
     lastUpdate: Timestamp.now(),
     ipAddress: ip,
-    sshUser: (data.sshUser ?? 'pi').trim() || 'pi',
+    sshUser: (data.sshUser ?? DEFAULT_DEVICE_SSH_USER).trim() || DEFAULT_DEVICE_SSH_USER,
     sshPort: port,
   });
 }
@@ -1467,7 +1470,7 @@ export async function updateDevice(
     status: data.status,
     lastUpdate: Timestamp.now(),
     ipAddress: ip,
-    sshUser: (data.sshUser ?? 'pi').trim() || 'pi',
+    sshUser: (data.sshUser ?? DEFAULT_DEVICE_SSH_USER).trim() || DEFAULT_DEVICE_SSH_USER,
     sshPort: port,
   });
 }
@@ -1518,7 +1521,7 @@ export async function seedFirestoreIfEmpty(): Promise<boolean> {
       status: r.occupancy > 0 ? 'online' : 'offline',
       lastUpdate: Timestamp.now(),
       ipAddress: seedIp,
-      sshUser: 'pi',
+      sshUser: DEFAULT_DEVICE_SSH_USER,
       sshPort: 22,
     });
   }
