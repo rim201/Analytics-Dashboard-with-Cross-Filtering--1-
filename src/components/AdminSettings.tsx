@@ -17,6 +17,7 @@ import {
 } from 'lucide-react';
 import React, { useEffect, useState } from 'react';
 import {
+  appendCurrentSnapshotForRoomAndSignalLinkedDevices,
   appendCurrentSnapshotsForAllRooms,
   appendAiActivityLog,
   signalDeviceSensorCaptureNow,
@@ -424,10 +425,29 @@ export default function AdminSettings() {
   const handleSignalPiCapture = async (device: DeviceRecord) => {
     setPiActionBusyId(device.id);
     try {
+      const rid = device.roomId?.trim();
+      let snapshotPart = '';
+      if (rid) {
+        try {
+          const { devicesSignaled } = await appendCurrentSnapshotForRoomAndSignalLinkedDevices(rid);
+          snapshotPart =
+            devicesSignaled > 0
+              ? `Snapshot enregistré pour la salle ; ${devicesSignaled} appareil(s) lié(s) notifié(s). `
+              : 'Snapshot enregistré pour la salle ; aucun autre appareil lié. ';
+        } catch {
+          snapshotPart = 'Snapshot salle impossible (salle absente ou erreur). ';
+        }
+      }
+      // Toujours mettre à jour la ligne cliquée : l’agent écoute ce document (deviceDocId).
       await signalDeviceSensorCaptureNow(device.id);
-      showToast('success', 'Signal « capture maintenant » envoyé à cet appareil.');
+      showToast(
+        'success',
+        rid
+          ? `${snapshotPart}Signal « capture maintenant » renvoyé sur cet appareil.`
+          : 'Signal « capture maintenant » envoyé à cet appareil (associez une salle pour enregistrer aussi un snapshot).',
+      );
     } catch {
-      showToast('error', 'Impossible d’envoyer le signal.');
+      showToast('error', 'Impossible d’envoyer la capture sur cet appareil.');
     } finally {
       setPiActionBusyId(null);
     }
@@ -1101,7 +1121,11 @@ export default function AdminSettings() {
                         </button>
                         <button
                           type="button"
-                          title="Capture capteurs maintenant"
+                          title={
+                            device.roomId?.trim()
+                              ? 'Snapshot Firestore pour la salle + signal capture sur le(s) Raspberry lié(s)'
+                              : 'Signal capture sur ce Raspberry uniquement (associez une salle pour aussi enregistrer un snapshot)'
+                          }
                           disabled={piActionBusyId === device.id}
                           onClick={() => void handleSignalPiCapture(device)}
                           className="p-2 text-amber-600 hover:bg-amber-50 rounded-lg transition disabled:opacity-50"

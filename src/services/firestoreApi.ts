@@ -655,13 +655,65 @@ export async function appendCurrentSnapshotsForAllRooms(): Promise<{
   return { snapshots: n, devicesSignaled };
 }
 
+/** `roomId` côté Firestore : chaîne ou DocumentReference — pour requêtes / comparaisons fiables. */
+function deviceRoomIdFromFirestore(value: unknown): string {
+  if (value == null || value === '') return '';
+  if (typeof value === 'string') return value.trim();
+  if (typeof value === 'object' && value !== null && 'id' in value) {
+    const id = (value as { id: unknown }).id;
+    if (typeof id === 'string' && id.length > 0) return id.trim();
+  }
+  return String(value).trim();
+}
+
+/**
+ * Comme une itération de {@link appendCurrentSnapshotsForAllRooms} : snapshot (dernières valeurs) pour **une** salle,
+ * puis signal `sensorCaptureRequestedAt` sur les documents `devices` dont `roomId` est cette salle.
+ * À utiliser pour la capture « par salle » ou depuis la ligne IoT (salle liée).
+ */
+export async function appendCurrentSnapshotForRoomAndSignalLinkedDevices(roomId: string): Promise<{
+  devicesSignaled: number;
+}> {
+  const rid = roomId.trim();
+  if (!rid) {
+    throw new Error('Identifiant de salle requis.');
+  }
+  const room = await getRoomById(rid);
+  if (!room) {
+    throw new Error('Salle introuvable.');
+  }
+
+  const prev = await fetchLatestMeasurementRow(rid);
+  const t = Timestamp.now();
+  await setRoomMeasurementDoc(rid, t, {
+    temperature: prev?.temperature ?? null,
+    humidity: prev?.humidity ?? null,
+    co2: prev?.co2 ?? null,
+    noise: prev?.noise ?? null,
+    light: prev?.light ?? null,
+  });
+
+  const allDevs = await getDocs(collection(db, 'devices'));
+  const now = Timestamp.now();
+  let count = 0;
+  for (const d of allDevs.docs) {
+    if (deviceRoomIdFromFirestore(d.data().roomId) !== rid) continue;
+    await updateDoc(d.ref, {
+      sensorCaptureRequestedAt: now,
+      lastUpdate: now,
+    });
+    count++;
+  }
+  return { devicesSignaled: count };
+}
+
 /** Demande aux Raspberry (documents \`devices\` liés à une salle) d’envoyer une mesure dès que possible. */
 export async function signalAllAssignedDevicesSensorCapture(): Promise<number> {
   const snap = await getDocs(collection(db, 'devices'));
   const now = Timestamp.now();
   let count = 0;
   for (const d of snap.docs) {
-    const roomId = String(d.data().roomId ?? '').trim();
+    const roomId = deviceRoomIdFromFirestore(d.data().roomId);
     if (!roomId) continue;
     await updateDoc(d.ref, { sensorCaptureRequestedAt: now, lastUpdate: now });
     count++;
@@ -1015,9 +1067,13 @@ export async function createRoom(payload: {
 
 /** ID du document `devices` associé à cette salle (au plus un, convention UI). */
 export async function getLinkedDeviceDocIdForRoom(roomId: string): Promise<string | undefined> {
-  const snap = await getDocs(query(collection(db, 'devices'), where('roomId', '==', roomId), limit(1)));
-  if (snap.empty) return undefined;
-  return snap.docs[0]?.id;
+  const rid = roomId.trim();
+  if (!rid) return undefined;
+  const snap = await getDocs(collection(db, 'devices'));
+  for (const d of snap.docs) {
+    if (deviceRoomIdFromFirestore(d.data().roomId) === rid) return d.id;
+  }
+  return undefined;
 }
 
 /**
@@ -1065,9 +1121,9 @@ export async function updateRoom(
   });
 
   const newDeviceId = (payload.existingDeviceId ?? '').trim();
-  const snapLinked = await getDocs(query(collection(db, 'devices'), where('roomId', '==', roomId)));
-
-  for (const d of snapLinked.docs) {
+  const allForRoom = await getDocs(collection(db, 'devices'));
+  for (const d of allForRoom.docs) {
+    if (deviceRoomIdFromFirestore(d.data().roomId) !== roomId) continue;
     if (d.id !== newDeviceId) {
       await updateDoc(d.ref, {
         roomId: '',
@@ -1101,10 +1157,11 @@ async function deleteMeasurementsBatch(roomId: string) {
 }
 
 async function deleteDevicesForRoom(roomId: string) {
-  const snap = await getDocs(query(collection(db, 'devices'), where('roomId', '==', roomId)));
+  const snap = await getDocs(collection(db, 'devices'));
   let batch = writeBatch(db);
   let n = 0;
   for (const d of snap.docs) {
+    if (deviceRoomIdFromFirestore(d.data().roomId) !== roomId) continue;
     batch.delete(d.ref);
     n++;
     if (n >= 450) {
@@ -1360,7 +1417,7 @@ export async function listDevices(roomNames: Map<string, string>): Promise<Devic
   const snap = await getDocs(collection(db, 'devices'));
   const rows = snap.docs.map((d) => {
     const x = d.data();
-    const roomId = String(x.roomId ?? '');
+    const roomId = deviceRoomIdFromFirestore(x.roomId);
     const sshPort = Number(x.sshPort);
     return {
       id: d.id,
@@ -1398,9 +1455,10 @@ async function assertDeviceRoomAndIpExclusive(params: {
   const ip = ipValidation.normalized;
 
   if (rid) {
-    const snapRoom = await getDocs(query(collection(db, 'devices'), where('roomId', '==', rid)));
-    for (const d of snapRoom.docs) {
-      if (d.id !== params.excludeDeviceDocId) {
+    const snapAll = await getDocs(collection(db, 'devices'));
+    for (const d of snapAll.docs) {
+      if (d.id === params.excludeDeviceDocId) continue;
+      if (deviceRoomIdFromFirestore(d.data().roomId) === rid) {
         throw new Error(
           'Cette salle est déjà associée à un autre appareil IoT. Une salle = un seul appareil ; retirez l’association existante ou choisissez une autre salle.',
         );
