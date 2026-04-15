@@ -152,7 +152,7 @@ if __name__ == "__main__":
 
 export function buildInstallSh(): string {
   return `#!/bin/bash
-set -euo pipefail
+set -Eeuo pipefail
 cd "$(dirname "$0")"
 echo "=== Installation agent salle (Python venv + systemd) ==="
 sudo apt-get update -qq
@@ -186,6 +186,11 @@ WantedBy=multi-user.target
 UNIT
 
 sudo systemctl daemon-reload
+# Si le service existe déjà, on repart d'un état propre avant redémarrage.
+if sudo systemctl list-unit-files | grep -q "^room-sensor-agent.service"; then
+  sudo systemctl stop room-sensor-agent || true
+  sudo systemctl reset-failed room-sensor-agent || true
+fi
 sudo systemctl enable room-sensor-agent
 sudo systemctl restart room-sensor-agent
 echo "OK — vérifiez: sudo systemctl status room-sensor-agent"
@@ -306,8 +311,8 @@ REMOTE="\${SSH_USER}@\${PI_IP}"`;
 set -euo pipefail
 
 ${usageAndKeyPath}
-SCP=(scp -q)
-SSH=(ssh -q)
+SCP=(scp)
+SSH=(ssh)
 if [[ "\${SSH_PORT}" != "22" ]]; then
   SCP+=( -P "\${SSH_PORT}" )
   SSH+=( -p "\${SSH_PORT}" )
@@ -340,7 +345,16 @@ echo "→ Transfert des fichiers..."
 "\${SCP[@]}" "\${TMP}/agent_config.json" "\${TMP}/sensor_agent.py" "\${TMP}/install.sh" "\${TMP}/serviceAccountKey.json" "\${REMOTE}:~/\${REMOTE_DIR}/"
 
 echo "→ Installation sur le Pi (venv + systemd)..."
-"\${SSH[@]}" -o BatchMode=no -o StrictHostKeyChecking=accept-new "\${REMOTE}" "chmod +x ~/\${REMOTE_DIR}/install.sh ~/\${REMOTE_DIR}/sensor_agent.py && cd ~/\${REMOTE_DIR} && ./install.sh"
+"\${SSH[@]}" -tt -o BatchMode=no -o StrictHostKeyChecking=accept-new "\${REMOTE}" "set -Eeuo pipefail; chmod +x ~/\${REMOTE_DIR}/install.sh ~/\${REMOTE_DIR}/sensor_agent.py && cd ~/\${REMOTE_DIR} && ./install.sh" || {
+  code=$?
+  echo ""
+  echo "❌ Échec de l'installation distante (code \${code})."
+  echo "Relance manuelle sur la Pi :"
+  echo "  ssh -p \${SSH_PORT} \${SSH_USER}@\${PI_IP}"
+  echo "  cd ~/\${REMOTE_DIR} && chmod +x install.sh sensor_agent.py && ./install.sh"
+  echo "Puis vérifiez : sudo systemctl status room-sensor-agent --no-pager -l"
+  exit "\${code}"
+}
 
 echo "Terminé — agent room-sensor sur \${PI_IP}."
 `;
