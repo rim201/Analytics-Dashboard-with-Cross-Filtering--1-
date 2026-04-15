@@ -567,6 +567,101 @@ export async function listRoomsWithLatestMeasurements(): Promise<RoomListRow[]> 
   );
 }
 
+/**
+ * Temps réel : liste des salles + dernière mesure de chaque salle.
+ * Déclenche `onData` à chaque changement de salle ou de dernière mesure.
+ */
+export function subscribeRoomsWithLatestMeasurements(
+  onData: (rows: RoomListRow[]) => void,
+  onError?: (error: Error) => void,
+): () => void {
+  const roomUnsubs = new Map<string, () => void>();
+  const roomRows = new Map<string, RoomRow>();
+  const latestByRoom = new Map<string, MeasurementRow | null>();
+
+  const emit = () => {
+    const rows = Array.from(roomRows.values())
+      .sort((a, b) => a.name.localeCompare(b.name, 'fr'))
+      .map((r) => {
+        const m = latestByRoom.get(r.id) ?? null;
+        const temperature = m?.temperature ?? null;
+        const humidity = m?.humidity ?? null;
+        const co2 = m?.co2 ?? null;
+        const noise = m?.noise ?? null;
+        const light = m?.light ?? null;
+        return {
+          id: r.id,
+          name: r.name,
+          capacity: r.capacity,
+          occupancy: r.occupancy,
+          status: r.status,
+          comfortScore:
+            computeComfortScoreFromSensors({
+              temperature,
+              humidity,
+              co2,
+              noise,
+              light,
+            }) ?? 0,
+          temperature,
+          humidity,
+          co2,
+          noise,
+          light,
+        } as RoomListRow;
+      });
+    onData(rows);
+  };
+
+  const roomsUnsub = onSnapshot(
+    query(collection(db, 'rooms'), orderBy('name')),
+    (snap) => {
+      const nextIds = new Set<string>();
+      for (const d of snap.docs) {
+        const room = mapRoomDoc(d);
+        nextIds.add(room.id);
+        roomRows.set(room.id, room);
+        if (!roomUnsubs.has(room.id)) {
+          const measUnsub = onSnapshot(
+            query(collection(db, 'rooms', room.id, 'measurements'), orderBy('timestamp', 'desc'), limit(1)),
+            (ms) => {
+              if (ms.empty) {
+                latestByRoom.set(room.id, null);
+              } else {
+                const raw = ms.docs[0].data();
+                const ts = raw.timestamp as Timestamp | undefined;
+                const timestampIso = ts?.toDate?.()?.toISOString?.() ?? new Date().toISOString();
+                latestByRoom.set(room.id, mapFirestoreDataToMeasurementRow(raw as Record<string, unknown>, timestampIso));
+              }
+              emit();
+            },
+            (e) => onError?.(e as Error),
+          );
+          roomUnsubs.set(room.id, measUnsub);
+        }
+      }
+      for (const [id, unsub] of roomUnsubs) {
+        if (!nextIds.has(id)) {
+          unsub();
+          roomUnsubs.delete(id);
+          roomRows.delete(id);
+          latestByRoom.delete(id);
+        }
+      }
+      emit();
+    },
+    (e) => onError?.(e as Error),
+  );
+
+  return () => {
+    roomsUnsub();
+    for (const [, unsub] of roomUnsubs) unsub();
+    roomUnsubs.clear();
+    roomRows.clear();
+    latestByRoom.clear();
+  };
+}
+
 /** Dernière mesure enregistrée (avant tout nouvel enregistrement dans le même flux). */
 async function fetchLatestMeasurementRow(roomId: string): Promise<MeasurementRow | null> {
   const snap = await getDocs(
@@ -1185,6 +1280,22 @@ export async function getRoomById(roomId: string): Promise<RoomRow | null> {
   return mapRoomDoc(r);
 }
 
+/** Temps réel : métadonnées d’une salle (name/capacity/occupancy/status). */
+export function subscribeRoomById(
+  roomId: string,
+  onData: (room: RoomRow | null) => void,
+  onError?: (error: Error) => void,
+): () => void {
+  return onSnapshot(
+    doc(db, 'rooms', roomId),
+    (snap) => {
+      if (!snap.exists()) onData(null);
+      else onData(mapRoomDoc(snap));
+    },
+    (e) => onError?.(e as Error),
+  );
+}
+
 // —— Measurements —— //
 
 export async function listMeasurements(roomId: string): Promise<MeasurementRow[]> {
@@ -1197,6 +1308,27 @@ export async function listMeasurements(roomId: string): Promise<MeasurementRow[]
     const timestampIso = ts?.toDate?.()?.toISOString?.() ?? new Date().toISOString();
     return mapFirestoreDataToMeasurementRow(x as Record<string, unknown>, timestampIso);
   });
+}
+
+/** Temps réel : dernières mesures d’une salle (max 100, tri desc). */
+export function subscribeMeasurements(
+  roomId: string,
+  onData: (rows: MeasurementRow[]) => void,
+  onError?: (error: Error) => void,
+): () => void {
+  return onSnapshot(
+    query(collection(db, 'rooms', roomId, 'measurements'), orderBy('timestamp', 'desc'), limit(100)),
+    (snap) => {
+      const rows = snap.docs.map((d) => {
+        const x = d.data();
+        const ts = x.timestamp as Timestamp | undefined;
+        const timestampIso = ts?.toDate?.()?.toISOString?.() ?? new Date().toISOString();
+        return mapFirestoreDataToMeasurementRow(x as Record<string, unknown>, timestampIso);
+      });
+      onData(rows);
+    },
+    (e) => onError?.(e as Error),
+  );
 }
 
 // —— Dashboard —— //

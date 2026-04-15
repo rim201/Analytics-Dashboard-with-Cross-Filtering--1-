@@ -6,7 +6,7 @@ import {
   getLinkedDeviceDocIdForRoom,
   listDevices,
   listRooms,
-  listRoomsWithLatestMeasurements,
+  subscribeRoomsWithLatestMeasurements,
   updateRoom,
   type DeviceRecord,
   type RoomListRow,
@@ -43,17 +43,12 @@ export default function RoomsManagement({ onRoomSelect, isAdmin = false }: Rooms
   const addFormRef = useRef<HTMLDivElement>(null);
   const editFormRef = useRef<HTMLDivElement>(null);
 
-  const fetchRooms = async () => {
-    try {
-      const data = await listRoomsWithLatestMeasurements();
-      setRooms(data);
-    } catch {
-      setRooms([]);
-    }
-  };
-
   useEffect(() => {
-    fetchRooms();
+    const unsub = subscribeRoomsWithLatestMeasurements(
+      (rows) => setRooms(rows),
+      () => setRooms([]),
+    );
+    return unsub;
   }, []);
 
   useEffect(() => {
@@ -224,7 +219,6 @@ export default function RoomsManagement({ onRoomSelect, isAdmin = false }: Rooms
         occupancy,
         existingDeviceId: linkedId || undefined,
       });
-      await fetchRooms();
       const linked = linkedId ? iotDevicesPicker.find((d) => d.id === linkedId) : undefined;
       setRoomActionMessage(
         linked
@@ -258,7 +252,6 @@ export default function RoomsManagement({ onRoomSelect, isAdmin = false }: Rooms
         occupancy,
         existingDeviceId: linkedId || undefined,
       });
-      await fetchRooms();
       const linked = linkedId ? iotDevicesPicker.find((d) => d.id === linkedId) : undefined;
       setRoomActionMessage(
         linked
@@ -285,7 +278,6 @@ export default function RoomsManagement({ onRoomSelect, isAdmin = false }: Rooms
 
     try {
       await deleteRoom(String(room.id));
-      await fetchRooms();
       setRoomActionMessage(`La salle « ${room.name} » a été supprimée.`);
     } catch (error) {
       setRoomActionMessage(`Échec de la suppression : ${error}`);

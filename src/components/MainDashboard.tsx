@@ -3,7 +3,12 @@ import { LineChart, Line, AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip,
 import React, { useEffect, useState } from 'react';
 import { PageType } from '../App';
 import { buildAiRecommendationsFromRooms, type AiDashboardRec } from '../services/aiRecommendations';
-import { fetchDashboardSummary, getAiConfig, listRoomsWithLatestMeasurements } from '../services/firestoreApi';
+import {
+  fetchDashboardSummary,
+  getAiConfig,
+  listRoomsWithLatestMeasurements,
+  subscribeRoomsWithLatestMeasurements,
+} from '../services/firestoreApi';
 
 interface MainDashboardProps {
   onNavigate: (page: PageType) => void;
@@ -30,8 +35,13 @@ export default function MainDashboard({ onNavigate }: MainDashboardProps) {
   const [aiAutoApply, setAiAutoApply] = useState(false);
 
   useEffect(() => {
-    Promise.all([fetchDashboardSummary(), getAiConfig(), listRoomsWithLatestMeasurements()])
-      .then(([data, ai, rooms]) => {
+    let cancelled = false;
+    let refreshTimer: ReturnType<typeof setTimeout> | null = null;
+
+    const refresh = async () => {
+      try {
+        const [data, ai, rooms] = await Promise.all([fetchDashboardSummary(), getAiConfig(), listRoomsWithLatestMeasurements()]);
+        if (cancelled) return;
         setSummary({
           comfortScore: data.comfortScore ?? 0,
           temperature: data.temperature ?? 0,
@@ -57,8 +67,28 @@ export default function MainDashboard({ onNavigate }: MainDashboardProps) {
             6,
           ),
         );
-      })
-      .catch(() => undefined);
+      } catch {
+        /* ignore */
+      }
+    };
+
+    const scheduleRefresh = () => {
+      if (refreshTimer) clearTimeout(refreshTimer);
+      refreshTimer = setTimeout(() => {
+        void refresh();
+      }, 200);
+    };
+
+    void refresh();
+    const unsub = subscribeRoomsWithLatestMeasurements(() => {
+      scheduleRefresh();
+    });
+
+    return () => {
+      cancelled = true;
+      unsub();
+      if (refreshTimer) clearTimeout(refreshTimer);
+    };
   }, []);
 
   return (

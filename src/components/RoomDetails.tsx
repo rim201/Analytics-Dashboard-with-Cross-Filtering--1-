@@ -4,7 +4,13 @@ import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContai
 import '../styles/custom.css';
 import { thresholdsForAggressiveness } from '../services/aiRecommendations';
 import { computeComfortScoreFromSensors } from '../services/comfortScore';
-import { getAiConfig, getRoomById, listMeasurements, updateRoomLight, type MeasurementRow } from '../services/firestoreApi';
+import {
+  getAiConfig,
+  subscribeMeasurements,
+  subscribeRoomById,
+  updateRoomLight,
+  type MeasurementRow,
+} from '../services/firestoreApi';
 
 const LUX_MIN = 150;
 const LUX_MAX = 1000;
@@ -55,13 +61,19 @@ export default function RoomDetails({ roomId, onBack, isAdmin = false }: RoomDet
     }
     setLoading(true);
     setError(null);
-    listMeasurements(numericRoomId)
-      .then((rows) => setMeasurements(rows))
-      .catch((err) => {
+    const unsub = subscribeMeasurements(
+      numericRoomId,
+      (rows) => {
+        setMeasurements(rows);
+        setLoading(false);
+      },
+      (err) => {
         setError(err.message || 'Failed to load measurements');
         setMeasurements([]);
-      })
-      .finally(() => setLoading(false));
+        setLoading(false);
+      },
+    );
+    return unsub;
   }, [numericRoomId]);
 
   useEffect(() => {
@@ -69,8 +81,9 @@ export default function RoomDetails({ roomId, onBack, isAdmin = false }: RoomDet
       setRoomInfo(null);
       return;
     }
-    getRoomById(numericRoomId)
-      .then((r) => {
+    const unsub = subscribeRoomById(
+      numericRoomId,
+      (r) => {
         if (!r) {
           setRoomInfo(null);
           return;
@@ -82,8 +95,10 @@ export default function RoomDetails({ roomId, onBack, isAdmin = false }: RoomDet
           occupancy: r.occupancy,
           status: r.status,
         });
-      })
-      .catch(() => setRoomInfo(null));
+      },
+      () => setRoomInfo(null),
+    );
+    return unsub;
   }, [numericRoomId]);
 
   /** Dernière mesure par date/heure (les plus récentes en tête côté API ; on garde un max explicite). */
@@ -150,18 +165,6 @@ export default function RoomDetails({ roomId, onBack, isAdmin = false }: RoomDet
       setLightSaving(true);
       try {
         await updateRoomLight(numericRoomId, v);
-        const r = await getRoomById(numericRoomId);
-        if (r) {
-          setRoomInfo({
-            id: r.id,
-            name: r.name,
-            capacity: r.capacity,
-            occupancy: r.occupancy,
-            status: r.status,
-          });
-        }
-        const rows = await listMeasurements(numericRoomId);
-        setMeasurements(rows);
       } catch {
         setLightError('Enregistrement impossible. Réessayez.');
       } finally {
