@@ -174,6 +174,7 @@ function App() {
         <TopNav
           displayName={userProfile.name}
           email={authUser.email ?? ''}
+          currentUserId={authUser.uid}
           role={userProfile.role}
           canAccessAlerts={canAccessAlerts}
           canModerateAlerts={canModerateAlertActions}

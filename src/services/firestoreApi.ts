@@ -332,15 +332,14 @@ export function subscribeInAppNotificationsForUser(
   onData: (items: InAppNotificationRow[]) => void,
   onError?: (e: Error) => void,
 ): () => void {
-  const q = query(
-    collection(db, 'inAppNotifications'),
-    where('userId', '==', userId),
-    orderBy('createdAt', 'desc'),
-    limit(40),
-  );
+  const q = query(collection(db, 'inAppNotifications'), where('userId', '==', userId), limit(100));
   return onSnapshot(
     q,
-    (snap) => onData(snap.docs.map(mapInAppNotificationDoc)),
+    (snap) => {
+      const rows = snap.docs.map(mapInAppNotificationDoc);
+      rows.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+      onData(rows.slice(0, 40));
+    },
     (err) => onError?.(err as Error),
   );
 }
