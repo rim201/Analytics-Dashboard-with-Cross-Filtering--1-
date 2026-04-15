@@ -7,6 +7,8 @@ export type PiAgentBundleParams = {
   sensorNotes?: string;
 };
 
+export const DEFAULT_AGENT_INTERVAL_SECONDS = 300;
+
 const SENSOR_DOC = `Capteurs prévus :
 - SEN0159 : CO₂
 - INMP441 I2S : bruit
@@ -16,13 +18,16 @@ const SENSOR_DOC = `Capteurs prévus :
 - PIR HC-SR501 : mouvement (optionnel, champ motion)`;
 
 /** JSON embarqué sur la carte : config web + cibles Firestore. */
-export function buildAgentConfigJson(params: PiAgentBundleParams): string {
+export function buildAgentConfigJson(
+  params: PiAgentBundleParams,
+  intervalSeconds: number = DEFAULT_AGENT_INTERVAL_SECONDS,
+): string {
   return `${JSON.stringify(
     {
       firebaseClient: firebaseClientConfig,
       deviceDocId: params.deviceDocId,
       roomId: params.roomId,
-      intervalSeconds: 900,
+      intervalSeconds,
       sensors: SENSOR_DOC,
     },
     null,
@@ -233,6 +238,8 @@ export function deployScriptFilenameFromIp(ip: string): string {
 export type BuildDeployShOptions = {
   /** JSON compte de service Firebase : le script n’exige plus le fichier clé en argument. */
   embeddedServiceAccountJson?: string | null;
+  /** Intervalle d’envoi périodique, en minutes (sera converti en secondes dans agent_config.json). */
+  intervalMinutes?: number;
 };
 
 /**
@@ -243,8 +250,11 @@ export type BuildDeployShOptions = {
 export function buildDeploySh(params: PiAgentBundleParams, options?: BuildDeployShOptions): string {
   const embedded = options?.embeddedServiceAccountJson?.trim();
   const useEmbedded = Boolean(embedded);
+  const requestedMinutes = Number(options?.intervalMinutes);
+  const safeMinutes = Number.isFinite(requestedMinutes) ? Math.max(1, Math.min(1440, Math.round(requestedMinutes))) : 5;
+  const intervalSeconds = safeMinutes * 60;
 
-  const agentJson = buildAgentConfigJson(params);
+  const agentJson = buildAgentConfigJson(params, intervalSeconds);
   const py = buildSensorAgentPy();
   const inst = buildInstallSh();
 

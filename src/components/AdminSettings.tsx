@@ -92,6 +92,7 @@ export default function AdminSettings() {
   const [measureDateFrom, setMeasureDateFrom] = useState('');
   const [measureDateTo, setMeasureDateTo] = useState('');
   const [measureBusy, setMeasureBusy] = useState(false);
+  const [deployIntervalMinutes, setDeployIntervalMinutes] = useState('5');
   const [retentionWeeksInput, setRetentionWeeksInput] = useState(String(DEFAULT_RETENTION_WEEKS));
   const [retentionAutoPurge, setRetentionAutoPurge] = useState(true);
   const [retentionLastPurge, setRetentionLastPurge] = useState<Date | null>(null);
@@ -404,6 +405,11 @@ export default function AdminSettings() {
       return;
     }
     const params = { deviceDocId: device.id, roomId: device.roomId };
+    const minutes = parseInt(deployIntervalMinutes, 10);
+    if (!Number.isFinite(minutes) || minutes < 1 || minutes > 1440) {
+      showToast('error', "Intervalle d’envoi invalide. Entrez une valeur entre 1 et 1440 minutes.");
+      return;
+    }
     const filename = deployScriptFilenameFromIp(ip);
     let embedded: string | null = null;
     try {
@@ -412,12 +418,15 @@ export default function AdminSettings() {
       showToast('error', 'Remote Config indisponible (réseau ou Firebase).');
       return;
     }
-    const script = buildDeploySh(params, { embeddedServiceAccountJson: embedded });
+    const script = buildDeploySh(params, {
+      embeddedServiceAccountJson: embedded,
+      intervalMinutes: minutes,
+    });
     downloadTextFile(filename, script, 'text/x-shellscript;charset=utf-8');
     showToast(
       'success',
       embedded
-        ? 'Script téléchargé (clé Remote Config). Suivez les étapes 4 à 7 du bandeau (chmod, port SSH si besoin, puis commande avec VOTRE_IP).'
+        ? `Script téléchargé (clé Remote Config, intervalle ${minutes} min). Suivez les étapes 4 à 7 du bandeau (chmod, port SSH si besoin, puis commande avec VOTRE_IP).`
         : `Script sans clé intégrée : étape 1 du bandeau (Remote Config « ${REMOTE_CONFIG_SERVICE_ACCOUNT_PARAM} ») ou étape 8 (fichier JSON en argument).`,
     );
   };
@@ -936,15 +945,30 @@ export default function AdminSettings() {
               </li>
             </ol>
           </div>
-          <div className="p-6 border-b border-gray-100 flex items-center justify-between">
+          <div className="p-6 border-b border-gray-100 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
             <h3 className="font-semibold text-gray-900">IoT Devices Management</h3>
-            <button
-              type="button"
-              onClick={openAddDeviceModal}
-              className="px-4 py-2 bg-emerald-500 text-white rounded-xl font-medium hover:bg-emerald-600 transition"
-            >
-              Add Device
-            </button>
+            <div className="flex items-center gap-2">
+              <label htmlFor="deploy-interval-min" className="text-xs text-gray-600 whitespace-nowrap">
+                Intervalle auto (min)
+              </label>
+              <input
+                id="deploy-interval-min"
+                type="number"
+                min={1}
+                max={1440}
+                value={deployIntervalMinutes}
+                onChange={(e) => setDeployIntervalMinutes(e.target.value)}
+                className="w-20 rounded-lg border border-gray-300 px-2 py-1 text-sm outline-none focus:ring-2 focus:ring-emerald-500"
+                title="Intégré dans le script téléchargé (agent_config.json > intervalSeconds)."
+              />
+              <button
+                type="button"
+                onClick={openAddDeviceModal}
+                className="px-4 py-2 bg-emerald-500 text-white rounded-xl font-medium hover:bg-emerald-600 transition"
+              >
+                Add Device
+              </button>
+            </div>
           </div>
           {deviceModalOpen && (
             <div className="border-b border-gray-200 bg-gray-50 px-6 py-5">
