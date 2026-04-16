@@ -3,6 +3,7 @@ import { getAnalytics } from "firebase/analytics";
 import type { Analytics } from "firebase/analytics";
 import { getFirestore } from "firebase/firestore";
 import { getAuth } from "firebase/auth";
+import { getDatabase } from "firebase/database";
 
 /** Config client Firebase (déjà publique dans l’app web) — utilisée pour le kit Raspberry Pi. */
 export const firebaseClientConfig = {
@@ -13,12 +14,16 @@ export const firebaseClientConfig = {
   messagingSenderId: "657494502026",
   appId: "1:657494502026:web:99f19b7e07aa05ec571b73",
   measurementId: "G-DEGMTJXDPQ",
+  /** Realtime Database — notifications in-app (`inAppNotifications/{uid}/…`). */
+  databaseURL: "https://analytics-dashboard-569c9-default-rtdb.firebaseio.com",
 } as const;
 
 export const app =
   getApps().length === 0 ? initializeApp({ ...firebaseClientConfig }) : getApp();
 
 export const db = getFirestore(app);
+
+export const rtdb = getDatabase(app);
 
 export const auth = getAuth(app);
 

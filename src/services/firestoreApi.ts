@@ -17,7 +17,8 @@ import {
   getDoc,
   type DocumentSnapshot,
 } from 'firebase/firestore';
-import { db } from '../firebase';
+import { onValue, push, ref as rtdbRef, set, update, type Unsubscribe } from 'firebase/database';
+import { db, rtdb } from '../firebase';
 import { validateDeviceIpAddress } from '../utils/deviceIpValidation';
 import type { AppRole } from './auth';
 import { computeComfortScoreFromSensors } from './comfortScore';
@@ -259,13 +260,10 @@ export async function alertApproveResolution(alertId: string, adminName: string)
   });
 
   if (targetUid) {
-    await addDoc(collection(db, 'inAppNotifications'), {
-      userId: targetUid,
+    await pushInAppNotificationRtdb(targetUid, {
       kind: 'alert_resolution_accepted',
       alertId,
       alertTitle: title,
-      read: false,
-      createdAt: Timestamp.now(),
     });
   }
 }
@@ -287,18 +285,17 @@ export async function alertRejectResolution(alertId: string): Promise<void> {
   });
 
   if (targetUid) {
-    await addDoc(collection(db, 'inAppNotifications'), {
-      userId: targetUid,
+    await pushInAppNotificationRtdb(targetUid, {
       kind: 'alert_resolution_rejected',
       alertId,
       alertTitle: title,
-      read: false,
-      createdAt: Timestamp.now(),
     });
   }
 }
 
-// —— Notifications in-app (cloche) —— //
+// —— Notifications in-app (cloche) — Realtime Database `inAppNotifications/{uid}/{id}` —— //
+
+const IN_APP_NOTIFICATIONS_RTDB = 'inAppNotifications';
 
 export type InAppNotificationKind = 'alert_resolution_accepted' | 'alert_resolution_rejected';
 
@@ -312,31 +309,62 @@ export type InAppNotificationRow = {
   createdAt: string;
 };
 
-function mapInAppNotificationDoc(d: DocumentSnapshot): InAppNotificationRow {
-  const x = d.data() ?? {};
-  const kind = x.kind === 'alert_resolution_rejected' ? 'alert_resolution_rejected' : 'alert_resolution_accepted';
-  return {
-    id: d.id,
-    userId: String(x.userId ?? ''),
-    kind,
-    alertId: String(x.alertId ?? ''),
-    alertTitle: String(x.alertTitle ?? ''),
-    read: x.read === true,
-    createdAt:
-      x.createdAt instanceof Timestamp ? x.createdAt.toDate().toISOString() : new Date().toISOString(),
-  };
+function mapInAppKindFromRtdb(k: unknown): InAppNotificationKind {
+  return k === 'alert_resolution_rejected' ? 'alert_resolution_rejected' : 'alert_resolution_accepted';
+}
+
+async function pushInAppNotificationRtdb(
+  userId: string,
+  payload: { kind: InAppNotificationKind; alertId: string; alertTitle: string },
+): Promise<void> {
+  const uid = userId.trim();
+  if (!uid) return;
+  const createdAt = Date.now();
+  const newRef = push(rtdbRef(rtdb, `${IN_APP_NOTIFICATIONS_RTDB}/${uid}`));
+  await set(newRef, {
+    userId: uid,
+    kind: payload.kind,
+    alertId: payload.alertId,
+    alertTitle: payload.alertTitle,
+    read: false,
+    createdAt,
+  });
 }
 
 export function subscribeInAppNotificationsForUser(
   userId: string,
   onData: (items: InAppNotificationRow[]) => void,
   onError?: (e: Error) => void,
-): () => void {
-  const q = query(collection(db, 'inAppNotifications'), where('userId', '==', userId), limit(100));
-  return onSnapshot(
-    q,
+): Unsubscribe {
+  const uid = userId.trim();
+  if (!uid) {
+    onData([]);
+    return () => {};
+  }
+  const r = rtdbRef(rtdb, `${IN_APP_NOTIFICATIONS_RTDB}/${uid}`);
+  return onValue(
+    r,
     (snap) => {
-      const rows = snap.docs.map(mapInAppNotificationDoc);
+      const v = snap.val() as Record<string, Record<string, unknown>> | null;
+      if (!v) {
+        onData([]);
+        return;
+      }
+      const rows: InAppNotificationRow[] = Object.entries(v).map(([id, x]) => {
+        const createdMs =
+          typeof x.createdAt === 'number' && Number.isFinite(x.createdAt)
+            ? x.createdAt
+            : Date.now();
+        return {
+          id,
+          userId: String(x.userId ?? uid),
+          kind: mapInAppKindFromRtdb(x.kind),
+          alertId: String(x.alertId ?? ''),
+          alertTitle: String(x.alertTitle ?? ''),
+          read: x.read === true,
+          createdAt: new Date(createdMs).toISOString(),
+        };
+      });
       rows.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
       onData(rows.slice(0, 40));
     },
@@ -344,26 +372,30 @@ export function subscribeInAppNotificationsForUser(
   );
 }
 
-export async function markInAppNotificationRead(notificationId: string): Promise<void> {
-  await updateDoc(doc(db, 'inAppNotifications', notificationId), {
+export async function markInAppNotificationRead(userId: string, notificationId: string): Promise<void> {
+  const uid = userId.trim();
+  const id = notificationId.trim();
+  if (!uid || !id) return;
+  await update(rtdbRef(rtdb, `${IN_APP_NOTIFICATIONS_RTDB}/${uid}/${id}`), {
     read: true,
-    updatedAt: Timestamp.now(),
+    updatedAt: Date.now(),
   });
 }
 
-export async function markInAppNotificationsReadMany(notificationIds: string[]): Promise<void> {
-  const ids = [...new Set(notificationIds)].filter(Boolean);
-  if (ids.length === 0) return;
-  const now = Timestamp.now();
-  const batchSize = 400;
-  for (let i = 0; i < ids.length; i += batchSize) {
-    const chunk = ids.slice(i, i + batchSize);
-    const batch = writeBatch(db);
-    for (const id of chunk) {
-      batch.update(doc(db, 'inAppNotifications', id), { read: true, updatedAt: now });
-    }
-    await batch.commit();
+export async function markInAppNotificationsReadMany(
+  userId: string,
+  notificationIds: string[],
+): Promise<void> {
+  const uid = userId.trim();
+  const ids = [...new Set(notificationIds.map((x) => x.trim()).filter(Boolean))];
+  if (!uid || ids.length === 0) return;
+  const now = Date.now();
+  const updates: Record<string, unknown> = {};
+  for (const id of ids) {
+    updates[`${IN_APP_NOTIFICATIONS_RTDB}/${uid}/${id}/read`] = true;
+    updates[`${IN_APP_NOTIFICATIONS_RTDB}/${uid}/${id}/updatedAt`] = now;
   }
+  await update(rtdbRef(rtdb), updates);
 }
 
 export async function seedAlertsIfEmpty(): Promise<boolean> {

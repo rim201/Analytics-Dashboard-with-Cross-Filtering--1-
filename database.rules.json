@@ -1,0 +1,12 @@
+{
+  "rules": {
+    "inAppNotifications": {
+      "$uid": {
+        ".read": "auth != null && auth.uid === $uid",
+        "$notifId": {
+          ".write": "auth != null"
+        }
+      }
+    }
+  }
+}
