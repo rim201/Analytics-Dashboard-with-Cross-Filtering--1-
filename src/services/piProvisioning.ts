@@ -15,7 +15,7 @@ const SENSOR_DOC = `Capteurs cibles (broches / ports dans hardware) :
 - SDS011 : qualité de l’air particules PM2.5 + PM10 (UART, champs pm25 / pm10)
 - Capteur CO₂ 0–5000 ppm : UART type MH-Z19 / compatible (champ co2)
 - MAX9814 : niveau sonore via sortie analogique → MCP3008 SPI (champ noise, estimation dB)
-- PIR HC-SR501 : mouvement (GPIO, champ motion). Pi 5 : si besoin, indiquez le contrôleur dans hardware.pirGpioChip (entier N pour /dev/gpiochipN, voir gpiodetect) ou export ROOM_SENSOR_PIR_GPIOCHIP=N
+- PIR HC-SR501 : mouvement (GPIO, champ motion). OUT → broche BCM hardware.pirGpio (souvent 17), alim module souvent 5 V mais **OUT vers GPIO 3,3 V** uniquement. hardware.pirSampleMs (50–2000, défaut 450) : fenêtre où une impulsion courte est détectée. hardware.pirActiveLow true si mouvement = niveau bas. hardware.pirPullUp true si ligne flottante. pirGpioChip / ROOM_SENSOR_PIR_GPIOCHIP si besoin (gpiodetect).
 Ports série (hardware dans agent_config.json) :
 - SDS011 sur adaptateur USB → en général /dev/ttyUSB0 (crw-rw---- root:dialout).
 - CO₂ UART sur le port série GPIO → sur Raspberry Pi OS /dev/serial0 pointe vers ttyS0 (ex. lrwxrwxrwx … serial0 -> ttyS0) : utiliser co2SerialDevice /dev/serial0 ou /dev/ttyS0.
@@ -37,6 +37,9 @@ export function buildAgentConfigJson(
         dht22Gpio: 4,
         pirGpio: 17,
         pirGpioChip: null,
+        pirPullUp: false,
+        pirActiveLow: false,
+        pirSampleMs: 450,
         bh1750I2cBus: 1,
         bh1750I2cAddr: 35,
         sds011SerialDevice: '/dev/ttyUSB0',
@@ -122,6 +125,29 @@ def _cfg_float(hw: dict, key: str, default: float) -> float:
         return float(v)
     except (TypeError, ValueError):
         return float(default)
+
+
+def _cfg_bool(hw: dict, key: str, default: bool) -> bool:
+    v = hw.get(key, default)
+    if isinstance(v, bool):
+        return v
+    if isinstance(v, (int, float)):
+        return bool(int(v))
+    if v is None:
+        return bool(default)
+    s = str(v).strip().lower()
+    if s in ("1", "true", "yes", "oui", "on"):
+        return True
+    if s in ("0", "false", "no", "non", "off", ""):
+        return False
+    return bool(default)
+
+
+def _pir_motion_from_line_high(line_is_high: bool, active_low: bool) -> int:
+    """Mouvement = 1 : ligne haute (logique positive) ou ligne basse si active_low."""
+    if active_low:
+        return int(not line_is_high)
+    return int(line_is_high)
 
 
 def _resolve_smbus_bus_number(preferred: int) -> int | None:
@@ -563,6 +589,8 @@ def _read_max9814_noise_db(
 
 _PIR_GPIO_READY = False
 _PIR_CONFIGURED_PINS = set()
+# Broche BCM -> (pirPullUp, pirActiveLow) au moment du GPIO.setup ; si ça change, on refait cleanup.
+_PIR_SETUP_OPTS = {}
 _PIR_LGPIO_IMPORT_WARNED = False
 # Dernier gpiochip (/dev/gpiochipN) où gpio_claim_input a réussi pour le PIR (Pi 5 : N varie selon le noyau).
 _PIR_LGPIO_CHIP = None
@@ -599,19 +627,31 @@ def _read_pir_lgpio(gpio_pin: int, preferred_gpiochip=None):
         if c not in chips:
             chips.append(c)
     last_err = None
+    flag_opts = [0]
+    for attr in ("SET_PULL_UP", "SET_PULL_DOWN"):
+        fv = getattr(lgpio, attr, None)
+        if fv is not None and isinstance(fv, int) and fv not in flag_opts:
+            flag_opts.append(fv)
     for chip in chips:
         h = lgpio.gpiochip_open(chip)
         if h < 0:
             continue
+        claimed = False
         try:
-            st = lgpio.gpio_claim_input(h, gpio_pin, 0)
-            if st < 0:
+            st = -1
+            for flags in flag_opts:
+                st = lgpio.gpio_claim_input(h, gpio_pin, flags)
+                if st >= 0:
+                    claimed = True
+                    break
                 last_err = st
+            if not claimed:
                 try:
                     lgpio.gpiochip_close(h)
                 except Exception:
                     pass
                 continue
+            time.sleep(0.03)
             v = lgpio.gpio_read(h, gpio_pin)
             try:
                 lgpio.gpio_free(h, gpio_pin)
@@ -630,6 +670,11 @@ def _read_pir_lgpio(gpio_pin: int, preferred_gpiochip=None):
         except Exception as e:
             last_err = e
             print("PIR lgpio gpiochip", chip, ":", e, flush=True)
+            if claimed:
+                try:
+                    lgpio.gpio_free(h, gpio_pin)
+                except Exception:
+                    pass
             try:
                 lgpio.gpiochip_close(h)
             except Exception:
@@ -649,49 +694,110 @@ def _read_pir_lgpio(gpio_pin: int, preferred_gpiochip=None):
     return None
 
 
-def _read_pir_gpiozero(gpio_pin: int):
-    """PIR via gpiozero (usine lgpio sur Bookworm)."""
+def _read_pir_gpiozero(gpio_pin: int, internal_pull_up: bool = False, active_low: bool = False):
+    """PIR via gpiozero — ordre des essais pull selon hardware.pirPullUp."""
     import os
 
     os.environ.setdefault("GPIOZERO_PIN_FACTORY", "lgpio")
     try:
         from gpiozero import DigitalInputDevice
     except ImportError:
-        print("PIR: pip install gpiozero (dans /opt/room-sensor/venv) + lgpio (pip install lgpio ou apt python3-lgpio + venv --system-site-packages)", flush=True)
+        print("PIR: pip install gpiozero (dans /opt/room-sensor/venv) + lgpio", flush=True)
         return None
-    try:
-        d = DigitalInputDevice(gpio_pin, pull_up=False)
-        time.sleep(0.02)
-        v = int(d.value)
-        d.close()
-        return v
-    except Exception as e:
-        print("PIR gpiozero:", e, flush=True)
-        return None
+    last_err = None
+    pull_order = (True, False) if internal_pull_up else (False, True)
+    for pull_up in pull_order:
+        try:
+            d = DigitalInputDevice(gpio_pin, pull_up=pull_up)
+            time.sleep(0.05)
+            raw = bool(d.value)
+            d.close()
+            return _pir_motion_from_line_high(raw, active_low)
+        except Exception as e:
+            last_err = e
+            continue
+    if last_err is not None:
+        print("PIR gpiozero (pull bas puis haut):", last_err, flush=True)
+    return None
 
 
-def _read_pir_motion(gpio_pin: int, preferred_gpiochip=None):
-    """PIR HC-SR501 : 0 / 1 — Pi 5 : lgpio d’abord, puis RPi.GPIO (rpi-lgpio), puis gpiozero."""
-    v = _read_pir_lgpio(gpio_pin, preferred_gpiochip)
-    if v is not None:
-        return v
-    global _PIR_GPIO_READY
+_PIR_BACKEND_LOGGED = ""
+
+
+def _read_pir_motion(
+    gpio_pin: int,
+    preferred_gpiochip=None,
+    internal_pull_up: bool = False,
+    active_low: bool = False,
+    sample_ms: int = 450,
+):
+    """PIR HC-SR501 : 0 / 1 — RPi.GPIO (rpi-lgpio) en premier ; échantillonnage pour impulsions courtes."""
+    global _PIR_GPIO_READY, _PIR_BACKEND_LOGGED, _PIR_CONFIGURED_PINS, _PIR_SETUP_OPTS
+    sample_ms = max(50, min(2000, int(sample_ms)))
+    window_s = sample_ms / 1000.0
+    step_s = min(0.05, max(0.01, window_s / 20))
+    # 1) RPi.GPIO : shim rpi-lgpio gère Pi 5 ; évite un « faux » succès lgpio sur le mauvais gpiochip (toujours 0).
     try:
         import RPi.GPIO as GPIO
+
+        try:
+            opt = (internal_pull_up, active_low)
+            if gpio_pin in _PIR_CONFIGURED_PINS and _PIR_SETUP_OPTS.get(gpio_pin) != opt:
+                try:
+                    GPIO.cleanup()
+                except Exception:
+                    pass
+                _PIR_GPIO_READY = False
+                _PIR_CONFIGURED_PINS.clear()
+                _PIR_SETUP_OPTS.clear()
+            if not _PIR_GPIO_READY:
+                GPIO.setmode(GPIO.BCM)
+                GPIO.setwarnings(False)
+                _PIR_GPIO_READY = True
+            if gpio_pin not in _PIR_CONFIGURED_PINS:
+                pud = GPIO.PUD_UP if internal_pull_up else GPIO.PUD_OFF
+                GPIO.setup(gpio_pin, GPIO.IN, pull_up_down=pud)
+                _PIR_CONFIGURED_PINS.add(gpio_pin)
+                _PIR_SETUP_OPTS[gpio_pin] = opt
+            deadline = time.time() + window_s
+            saw = 0
+            while time.time() < deadline:
+                line_hi = GPIO.input(gpio_pin) == GPIO.HIGH
+                if _pir_motion_from_line_high(line_hi, active_low) == 1:
+                    saw = 1
+                    break
+                time.sleep(step_s)
+            if _PIR_BACKEND_LOGGED != "RPi.GPIO":
+                _PIR_BACKEND_LOGGED = "RPi.GPIO"
+                print(
+                    "PIR: backend RPi.GPIO (BCM "
+                    + str(gpio_pin)
+                    + ") fenêtre "
+                    + str(sample_ms)
+                    + " ms — actif bas: "
+                    + str(active_low)
+                    + " — pull interne: "
+                    + str(internal_pull_up),
+                    flush=True,
+                )
+            return saw
+        except Exception as e:
+            print("PIR RPi.GPIO:", e, flush=True)
     except ImportError:
-        return _read_pir_gpiozero(gpio_pin)
-    try:
-        if not _PIR_GPIO_READY:
-            GPIO.setmode(GPIO.BCM)
-            GPIO.setwarnings(False)
-            _PIR_GPIO_READY = True
-        if gpio_pin not in _PIR_CONFIGURED_PINS:
-            GPIO.setup(gpio_pin, GPIO.IN)
-            _PIR_CONFIGURED_PINS.add(gpio_pin)
-        return int(GPIO.input(gpio_pin) == GPIO.HIGH)
-    except Exception as e:
-        print("PIR RPi.GPIO:", e, flush=True)
-        return _read_pir_gpiozero(gpio_pin)
+        pass
+
+    rv = _read_pir_lgpio(gpio_pin, preferred_gpiochip)
+    if rv is not None:
+        if _PIR_BACKEND_LOGGED != "lgpio":
+            _PIR_BACKEND_LOGGED = "lgpio"
+            print("PIR: backend lgpio (BCM", gpio_pin, ") — lecture ponctuelle ; préférer RPi.GPIO pour échantillonnage.", flush=True)
+        return _pir_motion_from_line_high(bool(int(rv)), active_low)
+
+    v = _read_pir_gpiozero(gpio_pin, internal_pull_up, active_low)
+    if v is not None and _PIR_BACKEND_LOGGED != "gpiozero":
+        _PIR_BACKEND_LOGGED = "gpiozero"
+        print("PIR: backend gpiozero (BCM", gpio_pin, ")", flush=True)
+    return v
 
 
 def read_sensors(cfg: dict) -> dict:
@@ -724,6 +830,9 @@ def read_sensors(cfg: dict) -> dict:
                 pir_chip_opt = None
             if pir_chip_opt is not None and pir_chip_opt < 0:
                 pir_chip_opt = None
+        pir_internal_pull = _cfg_bool(hw, "pirPullUp", False)
+        pir_active_low = _cfg_bool(hw, "pirActiveLow", False)
+        pir_sample_ms = max(50, min(2000, _cfg_int(hw, "pirSampleMs", 450)))
         i2c_bus = _cfg_int(hw, "bh1750I2cBus", 1)
         i2c_addr = _cfg_int(hw, "bh1750I2cAddr", 0x23)
         sds_dev = str(hw.get("sds011SerialDevice") or "/dev/ttyUSB0")
@@ -749,7 +858,7 @@ def read_sensors(cfg: dict) -> dict:
             )
             motion = None
         else:
-            motion = _read_pir_motion(pir_pin, pir_chip_opt)
+            motion = _read_pir_motion(pir_pin, pir_chip_opt, pir_internal_pull, pir_active_low, pir_sample_ms)
 
         out = {
             "temperature": temperature,
