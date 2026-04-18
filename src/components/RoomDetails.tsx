@@ -1,5 +1,15 @@
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
-import { ArrowLeft, Users, Thermometer, Wind, Volume2, Sun, Droplets, Brain } from 'lucide-react';
+import {
+  ArrowLeft,
+  Users,
+  Thermometer,
+  Wind,
+  Volume2,
+  Sun,
+  Droplets,
+  Brain,
+  Factory,
+} from 'lucide-react';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
 import '../styles/custom.css';
 import { thresholdsForAggressiveness } from '../services/aiRecommendations';
@@ -123,6 +133,8 @@ export default function RoomDetails({ roomId, onBack, isAdmin = false }: RoomDet
         co2: m.co2 ?? undefined,
         noise: m.noise ?? undefined,
         light: m.light ?? undefined,
+        pm25: m.pm25 ?? undefined,
+        pm10: m.pm10 ?? undefined,
       };
     });
   }, [measurements]);
@@ -200,6 +212,27 @@ export default function RoomDetails({ roomId, onBack, isAdmin = false }: RoomDet
         messages.push({
           title: 'Air Quality Stable',
           text: `${name}: CO₂ is under control (${Math.round(latest.co2)} ppm). Ventilation remains in efficient mode.`,
+          tone: 'blue',
+        });
+      }
+    } else if (latest.pm25 != null) {
+      const pm = latest.pm25;
+      if (pm > 55) {
+        messages.push({
+          title: 'Particle load (PM2.5)',
+          text: `${name}: PM2.5 around ${pm.toFixed(1)} µg/m³ (elevated). Consider ventilation or filtration (SDS011).`,
+          tone: 'blue',
+        });
+      } else if (pm > 15) {
+        messages.push({
+          title: 'Particle load (PM2.5)',
+          text: `${name}: PM2.5 moderate (${pm.toFixed(1)} µg/m³). Air acceptable; monitor if sensitive occupants.`,
+          tone: 'blue',
+        });
+      } else {
+        messages.push({
+          title: 'Particle load (PM2.5)',
+          text: `${name}: PM2.5 low (${pm.toFixed(1)} µg/m³). Particle levels look good.`,
           tone: 'blue',
         });
       }
@@ -485,6 +518,63 @@ export default function RoomDetails({ roomId, onBack, isAdmin = false }: RoomDet
         </div>
       </div>
 
+      {/* SDS011 — particules fines */}
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        <div className="bg-white rounded-2xl p-6 shadow-lg border border-gray-100">
+          <div className="flex items-center justify-between mb-4">
+            <div className="w-12 h-12 bg-gradient-to-br from-slate-100 to-slate-200 rounded-xl flex items-center justify-center">
+              <Factory className="w-6 h-6 text-slate-600" aria-hidden />
+            </div>
+            {latest?.pm25 != null ? (
+              <span
+                className={`px-2 py-1 text-xs font-medium rounded-lg ${
+                  getSensorStatus(latest.pm25, { good: 15, warning: 55 }).color === 'emerald'
+                    ? 'bg-emerald-50 text-emerald-600'
+                    : getSensorStatus(latest.pm25, { good: 15, warning: 55 }).color === 'amber'
+                      ? 'bg-amber-50 text-amber-600'
+                      : 'bg-red-50 text-red-600'
+                }`}
+              >
+                {getSensorStatus(latest.pm25, { good: 15, warning: 55 }).label}
+              </span>
+            ) : (
+              <span className="px-2 py-1 bg-gray-100 text-gray-500 text-xs font-medium rounded-lg">--</span>
+            )}
+          </div>
+          <div className="text-3xl font-bold text-gray-900 mb-1 tabular-nums">
+            {latest?.pm25 != null ? latest.pm25.toFixed(1) : '--'}
+          </div>
+          <div className="text-sm text-gray-500">PM2.5 (µg/m³) · SDS011</div>
+        </div>
+
+        <div className="bg-white rounded-2xl p-6 shadow-lg border border-gray-100">
+          <div className="flex items-center justify-between mb-4">
+            <div className="w-12 h-12 bg-gradient-to-br from-zinc-100 to-zinc-200 rounded-xl flex items-center justify-center">
+              <Factory className="w-6 h-6 text-zinc-600" aria-hidden />
+            </div>
+            {latest?.pm10 != null ? (
+              <span
+                className={`px-2 py-1 text-xs font-medium rounded-lg ${
+                  getSensorStatus(latest.pm10, { good: 45, warning: 100 }).color === 'emerald'
+                    ? 'bg-emerald-50 text-emerald-600'
+                    : getSensorStatus(latest.pm10, { good: 45, warning: 100 }).color === 'amber'
+                      ? 'bg-amber-50 text-amber-600'
+                      : 'bg-red-50 text-red-600'
+                }`}
+              >
+                {getSensorStatus(latest.pm10, { good: 45, warning: 100 }).label}
+              </span>
+            ) : (
+              <span className="px-2 py-1 bg-gray-100 text-gray-500 text-xs font-medium rounded-lg">--</span>
+            )}
+          </div>
+          <div className="text-3xl font-bold text-gray-900 mb-1 tabular-nums">
+            {latest?.pm10 != null ? latest.pm10.toFixed(1) : '--'}
+          </div>
+          <div className="text-sm text-gray-500">PM10 (µg/m³) · SDS011</div>
+        </div>
+      </div>
+
       {/* Loading / Error */}
       {loading && (
         <div className="text-center py-8 text-gray-500">Loading measurements…</div>
@@ -556,6 +646,23 @@ export default function RoomDetails({ roomId, onBack, isAdmin = false }: RoomDet
                 <YAxis stroke="#9ca3af" fontSize={12} domain={['auto', 'auto']} />
                 <Tooltip />
                 <Line type="monotone" dataKey="light" stroke="#f59e0b" strokeWidth={2} dot={false} />
+              </LineChart>
+            </ResponsiveContainer>
+          ) : (
+            <div className="flex h-[200px] items-center justify-center text-sm text-gray-400">--</div>
+          )}
+        </div>
+
+        <div className="bg-white rounded-2xl p-6 shadow-lg border border-gray-100">
+          <h3 className="font-semibold text-gray-900 mb-4">PM2.5 (24h)</h3>
+          {hasChartData ? (
+            <ResponsiveContainer width="100%" height={200}>
+              <LineChart data={chartData}>
+                <CartesianGrid strokeDasharray="3 3" stroke="#f3f4f6" />
+                <XAxis dataKey="time" stroke="#9ca3af" fontSize={12} />
+                <YAxis stroke="#9ca3af" fontSize={12} domain={['auto', 'auto']} />
+                <Tooltip />
+                <Line type="monotone" dataKey="pm25" stroke="#64748b" strokeWidth={2} dot={false} />
               </LineChart>
             </ResponsiveContainer>
           ) : (

@@ -62,6 +62,7 @@ export default function MainDashboard({ onNavigate }: MainDashboardProps) {
               temperature: r.temperature,
               co2: r.co2,
               light: r.light,
+              pm25: r.pm25,
             })),
             ai.settings.aggressiveness,
             6,

@@ -14,6 +14,7 @@ import {
   Database,
   FileText,
   Rocket,
+  RefreshCw,
 } from 'lucide-react';
 import React, { useEffect, useState } from 'react';
 import {
@@ -21,6 +22,7 @@ import {
   appendCurrentSnapshotsForAllRooms,
   appendAiActivityLog,
   signalDeviceSensorCaptureNow,
+  signalDeviceServiceRestartNow,
   createDevice,
   DEFAULT_DEVICE_SSH_USER,
   DEFAULT_RETENTION_WEEKS,
@@ -357,11 +359,17 @@ export default function AdminSettings() {
         sshPort: Number.isFinite(sshPort) && sshPort > 0 ? sshPort : 22,
       };
       if (editingDevice) {
-        await updateDevice(editingDevice.id, {
+        const deviceId = editingDevice.id;
+        await updateDevice(deviceId, {
           roomId: deviceForm.roomId,
           status: deviceForm.status,
           ...ipPayload,
         });
+        try {
+          await signalDeviceServiceRestartNow(deviceId);
+        } catch {
+          /* relance optionnelle : l’agent peut être hors ligne */
+        }
       } else {
         await createDevice({
           status: deviceForm.status,
@@ -373,7 +381,12 @@ export default function AdminSettings() {
       setDeviceModalOpen(false);
       setEditingDevice(null);
       await reloadAll();
-      showToast('success', editingDevice ? 'Device updated successfully.' : 'Device created successfully.');
+      showToast(
+        'success',
+        editingDevice
+          ? 'Device updated — remote service restart requested on the Raspberry (if online).'
+          : 'Device created successfully.',
+      );
     } catch (err) {
       setDeviceFormError(err instanceof Error ? err.message : 'Enregistrement impossible.');
     }
@@ -429,6 +442,18 @@ export default function AdminSettings() {
         ? `Script téléchargé (clé Remote Config, intervalle ${minutes} min). Suivez les étapes 4 à 7 du bandeau (chmod, port SSH si besoin, puis commande avec VOTRE_IP).`
         : `Script sans clé intégrée : étape 1 du bandeau (Remote Config « ${REMOTE_CONFIG_SERVICE_ACCOUNT_PARAM} ») ou étape 8 (fichier JSON en argument).`,
     );
+  };
+
+  const handleSignalPiServiceRestart = async (device: DeviceRecord) => {
+    setPiActionBusyId(device.id);
+    try {
+      await signalDeviceServiceRestartNow(device.id);
+      showToast('success', 'Relance du service demandée sur cet appareil (quelques secondes).');
+    } catch {
+      showToast('error', 'Impossible d’envoyer la relance du service.');
+    } finally {
+      setPiActionBusyId(null);
+    }
   };
 
   const handleSignalPiCapture = async (device: DeviceRecord) => {
@@ -1142,6 +1167,15 @@ export default function AdminSettings() {
                           className="p-2 text-violet-600 hover:bg-violet-50 rounded-lg transition disabled:opacity-40 disabled:pointer-events-none"
                         >
                           <Rocket className="w-4 h-4" />
+                        </button>
+                        <button
+                          type="button"
+                          title="Relancer l’agent systemd sur la Pi (après mise à jour des fichiers ou en cas de blocage)"
+                          disabled={piActionBusyId === device.id}
+                          onClick={() => void handleSignalPiServiceRestart(device)}
+                          className="p-2 text-slate-600 hover:bg-slate-100 rounded-lg transition disabled:opacity-50"
+                        >
+                          <RefreshCw className="w-4 h-4" />
                         </button>
                         <button
                           type="button"

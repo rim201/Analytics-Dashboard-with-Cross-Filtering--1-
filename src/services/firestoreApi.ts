@@ -41,6 +41,10 @@ export type MeasurementRow = {
   co2: number | null;
   noise: number | null;
   light: number | null;
+  /** SDS011 — particules fines (µg/m³). */
+  pm25: number | null;
+  /** SDS011 — particules (µg/m³). */
+  pm10: number | null;
 };
 
 function measurementNumericOrNull(v: unknown): number | null {
@@ -57,6 +61,8 @@ function mapFirestoreDataToMeasurementRow(x: Record<string, unknown>, timestampI
     co2: measurementNumericOrNull(x.co2),
     noise: measurementNumericOrNull(x.noise),
     light: measurementNumericOrNull(x.light),
+    pm25: measurementNumericOrNull(x.pm25),
+    pm10: measurementNumericOrNull(x.pm10),
   };
 }
 
@@ -562,6 +568,8 @@ export type RoomListRow = {
   co2: number | null;
   noise: number | null;
   light: number | null;
+  pm25: number | null;
+  pm10: number | null;
 };
 
 export async function listRoomsWithLatestMeasurements(): Promise<RoomListRow[]> {
@@ -574,6 +582,8 @@ export async function listRoomsWithLatestMeasurements(): Promise<RoomListRow[]> 
       const co2 = m?.co2 ?? null;
       const noise = m?.noise ?? null;
       const light = m?.light ?? null;
+      const pm25 = m?.pm25 ?? null;
+      const pm10 = m?.pm10 ?? null;
       return {
         id: r.id,
         name: r.name,
@@ -593,6 +603,8 @@ export async function listRoomsWithLatestMeasurements(): Promise<RoomListRow[]> 
         co2,
         noise,
         light,
+        pm25,
+        pm10,
       };
     }),
   );
@@ -620,6 +632,8 @@ export function subscribeRoomsWithLatestMeasurements(
         const co2 = m?.co2 ?? null;
         const noise = m?.noise ?? null;
         const light = m?.light ?? null;
+        const pm25 = m?.pm25 ?? null;
+        const pm10 = m?.pm10 ?? null;
         return {
           id: r.id,
           name: r.name,
@@ -639,6 +653,8 @@ export function subscribeRoomsWithLatestMeasurements(
           co2,
           noise,
           light,
+          pm25,
+          pm10,
         } as RoomListRow;
       });
     onData(rows);
@@ -720,6 +736,8 @@ export async function updateRoomLight(roomId: string, lightLux: number): Promise
       co2: prev.co2,
       noise: prev.noise,
       light: clamped,
+      pm25: prev.pm25,
+      pm10: prev.pm10,
     });
     return;
   }
@@ -730,6 +748,8 @@ export async function updateRoomLight(roomId: string, lightLux: number): Promise
     humidity: null,
     co2: null,
     noise: null,
+    pm25: null,
+    pm10: null,
   });
 }
 
@@ -774,6 +794,8 @@ export async function appendCurrentSnapshotsForAllRooms(): Promise<{
       co2: prev?.co2 ?? null,
       noise: prev?.noise ?? null,
       light: prev?.light ?? null,
+      pm25: prev?.pm25 ?? null,
+      pm10: prev?.pm10 ?? null,
     });
     n++;
   }
@@ -817,6 +839,8 @@ export async function appendCurrentSnapshotForRoomAndSignalLinkedDevices(roomId:
     co2: prev?.co2 ?? null,
     noise: prev?.noise ?? null,
     light: prev?.light ?? null,
+    pm25: prev?.pm25 ?? null,
+    pm10: prev?.pm10 ?? null,
   });
 
   const allDevs = await getDocs(collection(db, 'devices'));
@@ -850,6 +874,14 @@ export async function signalAllAssignedDevicesSensorCapture(): Promise<number> {
 export async function signalDeviceSensorCaptureNow(deviceId: string): Promise<void> {
   await updateDoc(doc(db, 'devices', deviceId), {
     sensorCaptureRequestedAt: Timestamp.now(),
+    lastUpdate: Timestamp.now(),
+  });
+}
+
+/** Demande au Raspberry de relancer l’unité systemd room-sensor-agent (l’agent efface le champ puis lance systemctl restart). */
+export async function signalDeviceServiceRestartNow(deviceId: string): Promise<void> {
+  await updateDoc(doc(db, 'devices', deviceId), {
+    serviceRestartRequestedAt: Timestamp.now(),
     lastUpdate: Timestamp.now(),
   });
 }

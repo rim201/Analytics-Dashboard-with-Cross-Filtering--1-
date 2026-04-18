@@ -21,6 +21,8 @@ type RoomSlice = {
   temperature: number | null;
   co2: number | null;
   light: number | null;
+  /** SDS011 PM2.5 (µg/m³) — utilisé si CO₂ absent. */
+  pm25: number | null;
 };
 
 /**
@@ -36,7 +38,8 @@ export function buildAiRecommendationsFromRooms(
   const out: AiDashboardRec[] = [];
 
   for (const r of rooms) {
-    const has = r.co2 != null || r.temperature != null || r.light != null;
+    const has =
+      r.co2 != null || r.pm25 != null || r.temperature != null || r.light != null;
     if (!has) continue;
 
     if (r.co2 != null) {
@@ -50,6 +53,26 @@ export function buildAiRecommendationsFromRooms(
         out.push({
           roomName: r.name,
           text: `Air quality acceptable (CO₂ ${Math.round(r.co2)} ppm). Maintain current ventilation.`,
+          tone: 'emerald',
+        });
+      }
+    } else if (r.pm25 != null && a >= 4) {
+      if (r.pm25 > 55) {
+        out.push({
+          roomName: r.name,
+          text: `Particle levels high (PM2.5 ~${r.pm25.toFixed(1)} µg/m³). Improve filtration or ventilation (SDS011).`,
+          tone: 'blue',
+        });
+      } else if (r.pm25 > 15) {
+        out.push({
+          roomName: r.name,
+          text: `PM2.5 moderate (~${r.pm25.toFixed(1)} µg/m³). Acceptable for most uses; monitor sensitive spaces.`,
+          tone: 'amber',
+        });
+      } else {
+        out.push({
+          roomName: r.name,
+          text: `PM2.5 low (~${r.pm25.toFixed(1)} µg/m³). Particle air quality looks good.`,
           tone: 'emerald',
         });
       }
