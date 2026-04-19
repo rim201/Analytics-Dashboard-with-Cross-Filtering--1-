@@ -15,7 +15,7 @@ const SENSOR_DOC = `Capteurs cibles (broches / ports dans hardware) :
 - SDS011 : qualité de l’air particules PM2.5 + PM10 (UART, champs pm25 / pm10)
 - Capteur CO₂ 0–5000 ppm : UART type MH-Z19 / compatible (champ co2)
 - MAX9814 : niveau sonore via sortie analogique → MCP3008 SPI (champ noise, estimation dB)
-- PIR HC-SR501 : mouvement (GPIO, champ motion). OUT → broche BCM hardware.pirGpio (souvent 17), alim module souvent 5 V mais **OUT vers GPIO 3,3 V** uniquement. hardware.pirSampleMs (50–2000, défaut 450) : fenêtre où une impulsion courte est détectée. hardware.pirActiveLow true si mouvement = niveau bas. hardware.pirPullUp true si ligne flottante. pirGpioChip / ROOM_SENSOR_PIR_GPIOCHIP si besoin (gpiodetect).
+- PIR HC-SR501 : lecture GPIO interne uniquement — **plus de champ motion dans les documents measurements** ; l’état salle = **rooms/{documentId}.occupancy** (0 libre, ≥1 occupé), mis à jour par l’agent. **roomId** dans agent_config.json doit être l’**ID Firestore** de la salle (sans préfixe « room- » si vous le voyez dans l’URL du dashboard ; l’agent accepte les deux formes). OUT → broche BCM hardware.pirGpio (défaut 23 dans le JSON généré ; à adapter à votre câblage), alim module souvent 5 V mais **OUT vers GPIO 3,3 V** uniquement (sortie 5 V sur GPIO = ligne bloquée à « 1 » / dommages — utiliser diviseur ou module 3,3 V). **Réglages module** : potentiomètre **TIME** (durée du signal après détection) — s’il est au maximum la sortie reste haute très longtemps ; le ramener au minimum puis augmenter si besoin. **SENS** : éviter sur-sensibilité (courants d’air). Jumper **L / H** : mode **non répétitif** (single) évite de réarmer en continu. pirSampleMs : courte attente avant lecture (ms). pirPreferGpiozero (défaut true) : lire le PIR avec gpiozero DigitalInputDevice en premier (comme les exemples Raspberry) ; mettre false pour forcer RPi.GPIO en premier. pirOccupancyPollSeconds (défaut 60) : entre deux envois complets, relecture PIR pour l’occupation. syncRoomOccupancyFromPir (défaut true) : met **occupancy** à **1 immédiatement** dès lecture GPIO mouvement ; repasse à **0** seulement après pirVacancyMinutes (défaut **2**) **sans** aucune lecture mouvement (rafraîchit la date interne à chaque m=1). pirActiveLow / pirPullUp selon le module. pirGpioChip / ROOM_SENSOR_PIR_GPIOCHIP si besoin (gpiodetect).
 Ports série (hardware dans agent_config.json) :
 - SDS011 sur adaptateur USB → en général /dev/ttyUSB0 (crw-rw---- root:dialout).
 - CO₂ UART sur le port série GPIO → sur Raspberry Pi OS /dev/serial0 pointe vers ttyS0 (ex. lrwxrwxrwx … serial0 -> ttyS0) : utiliser co2SerialDevice /dev/serial0 ou /dev/ttyS0.
@@ -35,11 +35,17 @@ export function buildAgentConfigJson(
       sensors: SENSOR_DOC,
       hardware: {
         dht22Gpio: 4,
-        pirGpio: 17,
+        pirGpio: 23,
         pirGpioChip: null,
         pirPullUp: false,
         pirActiveLow: false,
-        pirSampleMs: 450,
+        pirSampleMs: 700,
+        pirMotionMinFrac: 0.72,
+        pirVacancyMinutes: 2,
+        pirOccupancyPollSeconds: 60,
+        /** true : lire le PIR avec gpiozero (DigitalInputDevice) en premier, comme les exemples Raspberry ; false : RPi.GPIO en premier. */
+        pirPreferGpiozero: true,
+        syncRoomOccupancyFromPir: true,
         bh1750I2cBus: 1,
         bh1750I2cAddr: 35,
         sds011SerialDevice: '/dev/ttyUSB0',
@@ -141,6 +147,34 @@ def _cfg_bool(hw: dict, key: str, default: bool) -> bool:
     if s in ("0", "false", "no", "non", "off", ""):
         return False
     return bool(default)
+
+
+def _hardware_dict(cfg: dict) -> dict:
+    hw = cfg.get("hardware") or {}
+    return hw if isinstance(hw, dict) else {}
+
+
+def _normalize_firestore_room_id(room_id: str) -> str:
+    """Même ID que le document Firestore de la salle (collection rooms, id document ; le dashboard peut préfixer room-)."""
+    s = (room_id or "").strip()
+    low = s.lower()
+    if low.startswith("room-"):
+        rest = s[5:].strip()
+        return rest if rest else s
+    return s
+
+
+def _coerce_pir_sample(motion) -> int | None:
+    """0/1 pour la logique d’occupation ; None si valeur illisible (traité comme absence de signal mouvement)."""
+    if motion is None:
+        return None
+    if isinstance(motion, bool):
+        return int(motion)
+    try:
+        v = int(float(motion))
+        return 1 if v != 0 else 0
+    except (TypeError, ValueError):
+        return None
 
 
 def _pir_motion_from_line_high(line_is_high: bool, active_low: bool) -> int:
@@ -694,34 +728,73 @@ def _read_pir_lgpio(gpio_pin: int, preferred_gpiochip=None):
     return None
 
 
-def _read_pir_gpiozero(gpio_pin: int, internal_pull_up: bool = False, active_low: bool = False):
-    """PIR via gpiozero — ordre des essais pull selon hardware.pirPullUp."""
-    import os
+_PIR_BACKEND_LOGGED = ""
 
-    os.environ.setdefault("GPIOZERO_PIN_FACTORY", "lgpio")
+
+def _pir_try_gpiozero(
+    gpio_pin: int,
+    internal_pull_up: bool,
+    active_low: bool,
+    settle_s: float,
+):
+    """Comme les exemples Raspberry : DigitalInputDevice sur le BCM hardware.pirGpio + lecture value / is_active. Retourne 0/1 ou None si indisponible."""
+    global _PIR_BACKEND_LOGGED
+    import os as _os_gz
+
+    _os_gz.environ.setdefault("GPIOZERO_PIN_FACTORY", "lgpio")
     try:
         from gpiozero import DigitalInputDevice
     except ImportError:
-        print("PIR: pip install gpiozero (dans /opt/room-sensor/venv) + lgpio", flush=True)
         return None
-    last_err = None
     pull_order = (True, False) if internal_pull_up else (False, True)
+    last_err = None
     for pull_up in pull_order:
+        dev = None
         try:
-            d = DigitalInputDevice(gpio_pin, pull_up=pull_up)
-            time.sleep(0.05)
-            raw = bool(d.value)
-            d.close()
-            return _pir_motion_from_line_high(raw, active_low)
+            dev = DigitalInputDevice(gpio_pin, pull_up=pull_up)
+            if settle_s > 0:
+                time.sleep(settle_s)
+            # Niveau physique : True = ligne haute (identique à digitalRead côté Arduino)
+            line_hi = bool(dev.value)
+            is_act = bool(dev.is_active)
+            dev.close()
+            dev = None
+            saw = _pir_motion_from_line_high(line_hi, active_low)
+            if _PIR_BACKEND_LOGGED != "gpiozero":
+                _PIR_BACKEND_LOGGED = "gpiozero"
+                print(
+                    "PIR: backend gpiozero DigitalInputDevice (BCM",
+                    gpio_pin,
+                    ") — comme exemple Raspberry (pull_up=",
+                    pull_up,
+                    ")",
+                    flush=True,
+                )
+            print(
+                "PIR gpiozero: value="
+                + str(int(line_hi))
+                + " is_active="
+                + str(int(is_act))
+                + " -> motion="
+                + str(saw)
+                + " (HIGH phys.="
+                + str(line_hi)
+                + ")",
+                flush=True,
+            )
+            return saw
         except Exception as e:
             last_err = e
+            if dev is not None:
+                try:
+                    dev.close()
+                except Exception:
+                    pass
+                dev = None
             continue
     if last_err is not None:
-        print("PIR gpiozero (pull bas puis haut):", last_err, flush=True)
+        print("PIR gpiozero:", last_err, flush=True)
     return None
-
-
-_PIR_BACKEND_LOGGED = ""
 
 
 def _read_pir_motion(
@@ -730,13 +803,20 @@ def _read_pir_motion(
     internal_pull_up: bool = False,
     active_low: bool = False,
     sample_ms: int = 450,
+    motion_min_frac: float = 0.72,
+    prefer_gpiozero: bool = True,
 ):
-    """PIR HC-SR501 : 0 / 1 — RPi.GPIO (rpi-lgpio) en premier ; échantillonnage pour impulsions courtes."""
+    """PIR HC-SR501 : lecture digitale brute HIGH/LOW (Arduino). Par défaut gpiozero en premier (exemples Raspberry)."""
     global _PIR_GPIO_READY, _PIR_BACKEND_LOGGED, _PIR_CONFIGURED_PINS, _PIR_SETUP_OPTS
-    sample_ms = max(50, min(2000, int(sample_ms)))
-    window_s = sample_ms / 1000.0
-    step_s = min(0.05, max(0.01, window_s / 20))
-    # 1) RPi.GPIO : shim rpi-lgpio gère Pi 5 ; évite un « faux » succès lgpio sur le mauvais gpiochip (toujours 0).
+    sample_ms = max(0, min(2000, int(sample_ms)))
+    _ = motion_min_frac
+    settle_s = min(0.2, sample_ms / 1000.0) if sample_ms > 0 else 0.0
+
+    if prefer_gpiozero:
+        gz = _pir_try_gpiozero(gpio_pin, internal_pull_up, active_low, settle_s)
+        if gz is not None:
+            return gz
+
     try:
         import RPi.GPIO as GPIO
 
@@ -759,22 +839,19 @@ def _read_pir_motion(
                 GPIO.setup(gpio_pin, GPIO.IN, pull_up_down=pud)
                 _PIR_CONFIGURED_PINS.add(gpio_pin)
                 _PIR_SETUP_OPTS[gpio_pin] = opt
-            deadline = time.time() + window_s
-            saw = 0
-            while time.time() < deadline:
-                line_hi = GPIO.input(gpio_pin) == GPIO.HIGH
-                if _pir_motion_from_line_high(line_hi, active_low) == 1:
-                    saw = 1
-                    break
-                time.sleep(step_s)
+            if settle_s > 0:
+                time.sleep(settle_s)
+            line_hi = GPIO.input(gpio_pin) == GPIO.HIGH
+            saw = _pir_motion_from_line_high(line_hi, active_low)
+            print("PIR: lecture brute RPi.GPIO ->", saw, "(HIGH=" + str(line_hi) + ")", flush=True)
             if _PIR_BACKEND_LOGGED != "RPi.GPIO":
                 _PIR_BACKEND_LOGGED = "RPi.GPIO"
                 print(
                     "PIR: backend RPi.GPIO (BCM "
                     + str(gpio_pin)
-                    + ") fenêtre "
+                    + ") lecture directe (attente "
                     + str(sample_ms)
-                    + " ms — actif bas: "
+                    + " ms) — actif bas: "
                     + str(active_low)
                     + " — pull interne: "
                     + str(internal_pull_up),
@@ -786,23 +863,35 @@ def _read_pir_motion(
     except ImportError:
         pass
 
+    if settle_s > 0:
+        time.sleep(settle_s)
     rv = _read_pir_lgpio(gpio_pin, preferred_gpiochip)
     if rv is not None:
         if _PIR_BACKEND_LOGGED != "lgpio":
             _PIR_BACKEND_LOGGED = "lgpio"
-            print("PIR: backend lgpio (BCM", gpio_pin, ") — lecture ponctuelle ; préférer RPi.GPIO pour échantillonnage.", flush=True)
-        return _pir_motion_from_line_high(bool(int(rv)), active_low)
+            print(
+                "PIR: backend lgpio (BCM",
+                gpio_pin,
+                ") lecture directe (attente",
+                sample_ms,
+                "ms)",
+                flush=True,
+            )
+        saw_lg = _pir_motion_from_line_high(bool(int(rv)), active_low)
+        print("PIR lgpio: lecture brute ->", saw_lg, "(raw=" + str(rv) + ")", flush=True)
+        return saw_lg
 
-    v = _read_pir_gpiozero(gpio_pin, internal_pull_up, active_low)
-    if v is not None and _PIR_BACKEND_LOGGED != "gpiozero":
-        _PIR_BACKEND_LOGGED = "gpiozero"
-        print("PIR: backend gpiozero (BCM", gpio_pin, ")", flush=True)
-    return v
+    if not prefer_gpiozero:
+        gz2 = _pir_try_gpiozero(gpio_pin, internal_pull_up, active_low, settle_s)
+        if gz2 is not None:
+            return gz2
+    return None
 
 
-def read_sensors(cfg: dict) -> dict:
+def read_sensors(cfg: dict) -> tuple[dict, int | None]:
     """
-    Lit uniquement le matériel détectable. Chaque clé absente ou illisible → None (Firestore null).
+    Lit uniquement le matériel détectable. Retourne (valeurs pour measurements sans motion, lecture PIR 0/1 ou None).
+    Chaque clé absente ou illisible → None (Firestore null).
     Ne lève pas d’exception : en cas d’erreur de config ou matériel, retourne des null pour ne pas bloquer l’envoi.
     """
     empty = {
@@ -811,7 +900,6 @@ def read_sensors(cfg: dict) -> dict:
         "co2": None,
         "noise": None,
         "light": None,
-        "motion": None,
         "pm25": None,
         "pm10": None,
     }
@@ -820,7 +908,7 @@ def read_sensors(cfg: dict) -> dict:
         if not isinstance(hw, dict):
             hw = {}
         dht_pin = _cfg_int(hw, "dht22Gpio", 4)
-        pir_pin = _cfg_int(hw, "pirGpio", 17)
+        pir_pin = _cfg_int(hw, "pirGpio", 23)
         pir_gpiochip = hw.get("pirGpioChip")
         pir_chip_opt = None
         if pir_gpiochip is not None:
@@ -832,7 +920,9 @@ def read_sensors(cfg: dict) -> dict:
                 pir_chip_opt = None
         pir_internal_pull = _cfg_bool(hw, "pirPullUp", False)
         pir_active_low = _cfg_bool(hw, "pirActiveLow", False)
-        pir_sample_ms = max(50, min(2000, _cfg_int(hw, "pirSampleMs", 450)))
+        pir_sample_ms = max(50, min(2000, _cfg_int(hw, "pirSampleMs", 700)))
+        pir_motion_min_frac = max(0.0, min(1.0, _cfg_float(hw, "pirMotionMinFrac", 0.72)))
+        pir_prefer_gpiozero = _cfg_bool(hw, "pirPreferGpiozero", True)
         i2c_bus = _cfg_int(hw, "bh1750I2cBus", 1)
         i2c_addr = _cfg_int(hw, "bh1750I2cAddr", 0x23)
         sds_dev = str(hw.get("sds011SerialDevice") or "/dev/ttyUSB0")
@@ -858,7 +948,15 @@ def read_sensors(cfg: dict) -> dict:
             )
             motion = None
         else:
-            motion = _read_pir_motion(pir_pin, pir_chip_opt, pir_internal_pull, pir_active_low, pir_sample_ms)
+            motion = _read_pir_motion(
+                pir_pin,
+                pir_chip_opt,
+                pir_internal_pull,
+                pir_active_low,
+                pir_sample_ms,
+                pir_motion_min_frac,
+                pir_prefer_gpiozero,
+            )
 
         out = {
             "temperature": temperature,
@@ -866,19 +964,58 @@ def read_sensors(cfg: dict) -> dict:
             "co2": co2,
             "noise": noise,
             "light": light,
-            "motion": motion,
             "pm25": pm25,
             "pm10": pm10,
         }
         non_null = {k: v for k, v in out.items() if v is not None}
-        print("capteurs OK:", non_null if non_null else "(tous null)", flush=True)
-        return out
+        print(
+            "capteurs OK:",
+            non_null if non_null else "(tous null)",
+            "| pir (occupancy only):",
+            motion,
+            flush=True,
+        )
+        return out, motion
     except Exception as e:
         import traceback
 
         print("read_sensors:", e, flush=True)
         traceback.print_exc()
-        return dict(empty)
+        return dict(empty), None
+
+
+def poll_pir_motion_only(cfg: dict):
+    """Lit uniquement le PIR pour l’occupation (entre deux cycles complets). None si désactivé ou conflit broche DHT."""
+    hw = _hardware_dict(cfg)
+    if not _cfg_bool(hw, "syncRoomOccupancyFromPir", True):
+        return None
+    dht_pin = _cfg_int(hw, "dht22Gpio", 4)
+    pir_pin = _cfg_int(hw, "pirGpio", 23)
+    if dht_pin == pir_pin:
+        return None
+    pir_gpiochip = hw.get("pirGpioChip")
+    pir_chip_opt = None
+    if pir_gpiochip is not None:
+        try:
+            pir_chip_opt = int(pir_gpiochip)
+        except (TypeError, ValueError):
+            pir_chip_opt = None
+        if pir_chip_opt is not None and pir_chip_opt < 0:
+            pir_chip_opt = None
+    pir_internal_pull = _cfg_bool(hw, "pirPullUp", False)
+    pir_active_low = _cfg_bool(hw, "pirActiveLow", False)
+    pir_sample_ms = max(50, min(2000, _cfg_int(hw, "pirSampleMs", 700)))
+    pir_motion_min_frac = max(0.0, min(1.0, _cfg_float(hw, "pirMotionMinFrac", 0.72)))
+    pir_prefer_gpiozero = _cfg_bool(hw, "pirPreferGpiozero", True)
+    return _read_pir_motion(
+        pir_pin,
+        pir_chip_opt,
+        pir_internal_pull,
+        pir_active_low,
+        pir_sample_ms,
+        pir_motion_min_frac,
+        pir_prefer_gpiozero,
+    )
 
 
 def _trigger_systemd_service_restart():
@@ -896,10 +1033,14 @@ def _trigger_systemd_service_restart():
 
 
 def push_measurement(db, room_id: str, values: dict):
+    rid = _normalize_firestore_room_id(room_id)
+    if not rid:
+        print("push_measurement: roomId vide après normalisation — ignoré.", flush=True)
+        return
     now = datetime.now(timezone.utc)
     ts_ms = int(now.timestamp() * 1000)
     doc_id = measurement_doc_id(ts_ms)
-    mref = db.collection("rooms").document(room_id).collection("measurements").document(doc_id)
+    mref = db.collection("rooms").document(rid).collection("measurements").document(doc_id)
     payload = {
         "timestamp": now,
         "temperature": values.get("temperature"),
@@ -907,18 +1048,68 @@ def push_measurement(db, room_id: str, values: dict):
         "co2": values.get("co2"),
         "noise": values.get("noise"),
         "light": values.get("light"),
-        "motion": values.get("motion"),
         "pm25": values.get("pm25"),
         "pm10": values.get("pm10"),
     }
     mref.set(payload)
 
 
+_PIR_LAST_MOTION_WALL = None
+_PUBLISHED_PIR_OCCUPANCY = None
+
+
+def sync_room_occupancy_from_pir(db, room_id: str, cfg: dict, motion):
+    """Firestore occupancy : 1 dès que GPIO mouvement (m=1), sans délai ; 0 seulement après pirVacancyMinutes sans aucun m=1."""
+    global _PIR_LAST_MOTION_WALL, _PUBLISHED_PIR_OCCUPANCY
+    rid = _normalize_firestore_room_id(room_id)
+    if not rid:
+        return
+    hw = cfg.get("hardware") or {}
+    if not isinstance(hw, dict):
+        hw = {}
+    if not _cfg_bool(hw, "syncRoomOccupancyFromPir", True):
+        return
+    vac_min = max(1, min(180, _cfg_int(hw, "pirVacancyMinutes", 2)))
+    vac_s = float(vac_min) * 60.0
+    now = time.time()
+    cm = _coerce_pir_sample(motion)
+    m = 0 if cm is None else cm
+    if m == 1:
+        _PIR_LAST_MOTION_WALL = now
+        new_occ = 1
+    else:
+        if _PIR_LAST_MOTION_WALL is not None and (now - _PIR_LAST_MOTION_WALL) < vac_s:
+            new_occ = 1
+        else:
+            new_occ = 0
+    if new_occ == _PUBLISHED_PIR_OCCUPANCY:
+        return
+    try:
+        db.collection("rooms").document(rid).set(
+            {
+                "occupancy": int(new_occ),
+                "lastUpdate": firestore.SERVER_TIMESTAMP,
+            },
+            merge=True,
+        )
+        _PUBLISHED_PIR_OCCUPANCY = new_occ
+        msg = "syncRoomOccupancyFromPir: room_id=" + rid + " occupancy -> " + str(int(new_occ))
+        if int(new_occ) == 0 and m == 0 and _PIR_LAST_MOTION_WALL is not None:
+            msg += (
+                " | salle libre : aucun GPIO mouvement depuis "
+                + str(vac_min)
+                + " min (pirVacancyMinutes)."
+            )
+        print(msg, flush=True)
+    except Exception as e:
+        print("syncRoomOccupancyFromPir:", e, flush=True)
+
+
 def main():
     if not SA_PATH.is_file():
         raise SystemExit(f"Manque {SA_PATH.name} — compte de service Firebase (console Projet > Comptes de service).")
     cfg = load_cfg()
-    room_id = str(cfg.get("roomId") or "").strip()
+    room_id = _normalize_firestore_room_id(str(cfg.get("roomId") or "").strip())
     device_id = str(cfg.get("deviceDocId") or "").strip()
     if not room_id or not device_id:
         raise SystemExit("agent_config.json : roomId et deviceDocId obligatoires (chaînes).")
@@ -936,6 +1127,7 @@ def main():
     last_cycle = 0.0
     last_push_wall = 0.0
     last_restart_req_wall = 0.0
+    last_pir_occ_sync = 0.0
 
     while True:
         try:
@@ -968,8 +1160,10 @@ def main():
                     force = True
             due = (now - last_cycle) >= interval
             if due or force:
-                vals = read_sensors(cfg)
+                vals, pir_motion = read_sensors(cfg)
                 push_measurement(db, room_id, vals)
+                sync_room_occupancy_from_pir(db, room_id, cfg, pir_motion)
+                last_pir_occ_sync = time.time()
                 # update() échoue si le document devices n’existe pas encore — set(merge) suffit pour les horodatages
                 try:
                     dref.update(
@@ -989,9 +1183,28 @@ def main():
                     )
                 last_cycle = now
                 last_push_wall = time.time()
-                print(datetime.now().isoformat(), "measurement pushed", vals, flush=True)
+                print(
+                    datetime.now().isoformat(),
+                    "measurement pushed",
+                    vals,
+                    "pir_gpio_motion=",
+                    pir_motion,
+                    "(0/1 lecture GPIO ; occupancy=1 immédiat si 1, libre après vacance sans 1)",
+                    flush=True,
+                )
         except Exception as e:
             print("error:", e, flush=True)
+        try:
+            hw_poll = _hardware_dict(cfg)
+            if _cfg_bool(hw_poll, "syncRoomOccupancyFromPir", True):
+                pol = max(15, min(600, _cfg_int(hw_poll, "pirOccupancyPollSeconds", 60)))
+                if time.time() - last_pir_occ_sync >= pol:
+                    pm = poll_pir_motion_only(cfg)
+                    if pm is not None:
+                        sync_room_occupancy_from_pir(db, room_id, cfg, pm)
+                    last_pir_occ_sync = time.time()
+        except Exception as e_poll:
+            print("pir occupancy poll:", e_poll, flush=True)
         time.sleep(30)
 
 

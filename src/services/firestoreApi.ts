@@ -1235,15 +1235,15 @@ export async function getLinkedDeviceDocIdForRoom(roomId: string): Promise<strin
 }
 
 /**
- * Met à jour nom, capacité, occupation et appareil lié.
- * Refusé si la salle est encore occupée au moment de l’appel.
+ * Met à jour nom, capacité et appareil lié. L’occupation est pilotée par le capteur PIR (agent) sauf si `occupancy` est fourni.
  */
 export async function updateRoom(
   roomId: string,
   payload: {
     name: string;
     capacity: number;
-    occupancy: number;
+    /** Si omis, le champ Firestore `occupancy` n’est pas modifié (ex. capteur PIR). */
+    occupancy?: number;
     /** Document `devices` à rattacher ; vide = aucun appareil sur cette salle. */
     existingDeviceId?: string;
   },
@@ -1251,9 +1251,6 @@ export async function updateRoom(
   const room = await getRoomById(roomId);
   if (!room) {
     throw new Error('Salle introuvable.');
-  }
-  if (room.occupancy > 0) {
-    throw new Error('Impossible de modifier une salle tant qu’elle est occupée.');
   }
 
   const name = payload.name.trim();
@@ -1266,17 +1263,20 @@ export async function updateRoom(
     throw new Error('Capacité invalide.');
   }
 
-  const occupancy = Number(payload.occupancy);
-  if (!Number.isFinite(occupancy) || occupancy < 0 || occupancy > capacity) {
-    throw new Error("Occupation invalide (0 à capacité).");
-  }
-
-  await updateDoc(doc(db, 'rooms', roomId), {
+  const updatePayload: Record<string, unknown> = {
     name,
     capacity,
-    occupancy,
     updatedAt: Timestamp.now(),
-  });
+  };
+  if (payload.occupancy !== undefined) {
+    const occupancy = Number(payload.occupancy);
+    if (!Number.isFinite(occupancy) || occupancy < 0 || occupancy > capacity) {
+      throw new Error("Occupation invalide (0 à capacité).");
+    }
+    updatePayload.occupancy = occupancy;
+  }
+
+  await updateDoc(doc(db, 'rooms', roomId), updatePayload);
 
   const newDeviceId = (payload.existingDeviceId ?? '').trim();
   const allForRoom = await getDocs(collection(db, 'devices'));

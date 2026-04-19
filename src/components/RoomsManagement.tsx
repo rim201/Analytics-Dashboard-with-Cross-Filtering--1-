@@ -1,4 +1,4 @@
-import { Search, Filter, Users, Thermometer, Wind, Volume2, Sun, Plus, Trash2, Droplets, Pencil } from 'lucide-react';
+import { Search, Filter, Thermometer, Wind, Volume2, Sun, Plus, Trash2, Droplets, Pencil } from 'lucide-react';
 import React, { useEffect, useRef, useState } from 'react';
 import {
   createRoom,
@@ -20,7 +20,6 @@ interface RoomsManagementProps {
 const defaultAddForm = () => ({
   name: '',
   capacity: '',
-  occupancy: '0',
   linkedDeviceId: '',
 });
 
@@ -170,13 +169,6 @@ export default function RoomsManagement({ onRoomSelect, isAdmin = false }: Rooms
       err.capacity = 'Capacité ≥ 1 requise.';
     }
 
-    const occupancy = parseInt(addForm.occupancy, 10);
-    if (Number.isNaN(occupancy) || occupancy < 0) {
-      err.occupancy = 'Nombre entier ≥ 0.';
-    } else if (!Number.isNaN(capacity) && occupancy > capacity) {
-      err.occupancy = "Ne peut pas dépasser la capacité.";
-    }
-
     setAddFormErrors(err);
     return Object.keys(err).length === 0;
   };
@@ -191,13 +183,6 @@ export default function RoomsManagement({ onRoomSelect, isAdmin = false }: Rooms
       err.capacity = 'Capacité ≥ 1 requise.';
     }
 
-    const occupancy = parseInt(editForm.occupancy, 10);
-    if (Number.isNaN(occupancy) || occupancy < 0) {
-      err.occupancy = 'Nombre entier ≥ 0.';
-    } else if (!Number.isNaN(capacity) && occupancy > capacity) {
-      err.occupancy = "Ne peut pas dépasser la capacité.";
-    }
-
     setEditFormErrors(err);
     return Object.keys(err).length === 0;
   };
@@ -208,7 +193,6 @@ export default function RoomsManagement({ onRoomSelect, isAdmin = false }: Rooms
     if (!validateAddForm()) return;
 
     const capacity = parseInt(addForm.capacity, 10);
-    const occupancy = parseInt(addForm.occupancy, 10);
     const linkedId = addForm.linkedDeviceId.trim();
 
     setAddRoomSubmitting(true);
@@ -216,7 +200,7 @@ export default function RoomsManagement({ onRoomSelect, isAdmin = false }: Rooms
       await createRoom({
         name: addForm.name.trim(),
         capacity,
-        occupancy,
+        occupancy: 0,
         existingDeviceId: linkedId || undefined,
       });
       const linked = linkedId ? iotDevicesPicker.find((d) => d.id === linkedId) : undefined;
@@ -241,7 +225,6 @@ export default function RoomsManagement({ onRoomSelect, isAdmin = false }: Rooms
     if (!validateEditForm()) return;
 
     const capacity = parseInt(editForm.capacity, 10);
-    const occupancy = parseInt(editForm.occupancy, 10);
     const linkedId = editForm.linkedDeviceId.trim();
 
     setEditRoomSubmitting(true);
@@ -249,7 +232,6 @@ export default function RoomsManagement({ onRoomSelect, isAdmin = false }: Rooms
       await updateRoom(editRoomId, {
         name: editForm.name.trim(),
         capacity,
-        occupancy,
         existingDeviceId: linkedId || undefined,
       });
       const linked = linkedId ? iotDevicesPicker.find((d) => d.id === linkedId) : undefined;
@@ -364,39 +346,21 @@ export default function RoomsManagement({ onRoomSelect, isAdmin = false }: Rooms
               {addFormErrors.name && <p className="mt-1 text-sm text-red-600">{addFormErrors.name}</p>}
             </div>
 
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-              <div>
-                <label htmlFor="room-capacity" className="block text-sm font-medium text-gray-700 mb-1">
-                  Capacité (places) <span className="text-red-500">*</span>
-                </label>
-                <input
-                  id="room-capacity"
-                  type="number"
-                  min={1}
-                  value={addForm.capacity}
-                  onChange={(e) => setAddForm((f) => ({ ...f, capacity: e.target.value }))}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-xl focus:ring-2 focus:ring-emerald-500 outline-none"
-                />
-                {addFormErrors.capacity && (
-                  <p className="mt-1 text-sm text-red-600">{addFormErrors.capacity}</p>
-                )}
-              </div>
-              <div>
-                <label htmlFor="room-occupancy" className="block text-sm font-medium text-gray-700 mb-1">
-                  Occupation actuelle
-                </label>
-                <input
-                  id="room-occupancy"
-                  type="number"
-                  min={0}
-                  value={addForm.occupancy}
-                  onChange={(e) => setAddForm((f) => ({ ...f, occupancy: e.target.value }))}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-xl focus:ring-2 focus:ring-emerald-500 outline-none"
-                />
-                {addFormErrors.occupancy && (
-                  <p className="mt-1 text-sm text-red-600">{addFormErrors.occupancy}</p>
-                )}
-              </div>
+            <div>
+              <label htmlFor="room-capacity" className="block text-sm font-medium text-gray-700 mb-1">
+                Capacité (places) <span className="text-red-500">*</span>
+              </label>
+              <input
+                id="room-capacity"
+                type="number"
+                min={1}
+                value={addForm.capacity}
+                onChange={(e) => setAddForm((f) => ({ ...f, capacity: e.target.value }))}
+                className="w-full px-3 py-2 border border-gray-300 rounded-xl focus:ring-2 focus:ring-emerald-500 outline-none"
+              />
+              {addFormErrors.capacity && (
+                <p className="mt-1 text-sm text-red-600">{addFormErrors.capacity}</p>
+              )}
             </div>
 
             <div className="pt-2 border-t border-gray-100">
@@ -480,7 +444,8 @@ export default function RoomsManagement({ onRoomSelect, isAdmin = false }: Rooms
 
           <form onSubmit={handleSubmitEditRoom} className="px-6 py-4 space-y-4">
             <p className="text-sm text-gray-600">
-              La modification n’est possible que lorsque la salle n’est pas occupée (occupation à 0).
+              L’occupation (libre / occupée) est mise à jour automatiquement par le capteur de mouvement sur l’appareil. Vous
+              pouvez modifier le nom, la capacité et l’appareil lié.
             </p>
             <div>
               <label htmlFor="edit-room-name" className="block text-sm font-medium text-gray-700 mb-1">
@@ -497,39 +462,21 @@ export default function RoomsManagement({ onRoomSelect, isAdmin = false }: Rooms
               {editFormErrors.name && <p className="mt-1 text-sm text-red-600">{editFormErrors.name}</p>}
             </div>
 
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-              <div>
-                <label htmlFor="edit-room-capacity" className="block text-sm font-medium text-gray-700 mb-1">
-                  Capacité (places) <span className="text-red-500">*</span>
-                </label>
-                <input
-                  id="edit-room-capacity"
-                  type="number"
-                  min={1}
-                  value={editForm.capacity}
-                  onChange={(e) => setEditForm((f) => ({ ...f, capacity: e.target.value }))}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none"
-                />
-                {editFormErrors.capacity && (
-                  <p className="mt-1 text-sm text-red-600">{editFormErrors.capacity}</p>
-                )}
-              </div>
-              <div>
-                <label htmlFor="edit-room-occupancy" className="block text-sm font-medium text-gray-700 mb-1">
-                  Occupation actuelle
-                </label>
-                <input
-                  id="edit-room-occupancy"
-                  type="number"
-                  min={0}
-                  value={editForm.occupancy}
-                  onChange={(e) => setEditForm((f) => ({ ...f, occupancy: e.target.value }))}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none"
-                />
-                {editFormErrors.occupancy && (
-                  <p className="mt-1 text-sm text-red-600">{editFormErrors.occupancy}</p>
-                )}
-              </div>
+            <div>
+              <label htmlFor="edit-room-capacity" className="block text-sm font-medium text-gray-700 mb-1">
+                Capacité (places) <span className="text-red-500">*</span>
+              </label>
+              <input
+                id="edit-room-capacity"
+                type="number"
+                min={1}
+                value={editForm.capacity}
+                onChange={(e) => setEditForm((f) => ({ ...f, capacity: e.target.value }))}
+                className="w-full px-3 py-2 border border-gray-300 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none"
+              />
+              {editFormErrors.capacity && (
+                <p className="mt-1 text-sm text-red-600">{editFormErrors.capacity}</p>
+              )}
             </div>
 
             <div className="pt-2 border-t border-gray-100">
@@ -635,10 +582,7 @@ export default function RoomsManagement({ onRoomSelect, isAdmin = false }: Rooms
               <div className="flex items-start justify-between mb-4">
                 <div className="flex-1">
                   <h3 className="font-semibold text-gray-900 mb-1">{room.name}</h3>
-                  <div className="flex items-center space-x-2 text-sm text-gray-500">
-                    <Users className="w-4 h-4" />
-                    <span>Capacity: {room.capacity}</span>
-                  </div>
+                  <p className="text-sm text-gray-500">Capacity: {room.capacity}</p>
                 </div>
                 <div className={`px-3 py-1 rounded-full text-xs font-medium border ${getComfortColor(room.comfortScore)}`}>
                   {room.comfortScore}%
@@ -649,11 +593,6 @@ export default function RoomsManagement({ onRoomSelect, isAdmin = false }: Rooms
               <div className="flex items-center space-x-2">
                 <div className={`w-2 h-2 rounded-full ${getStatusColor(room.status)}`}></div>
                 <span className="text-sm font-medium text-gray-700 capitalize">{room.status === 'busy' ? 'occupied' : room.status}</span>
-                {room.occupancy > 0 && (
-                  <span className="text-sm text-gray-500">
-                    ({room.occupancy}/{room.capacity} people)
-                  </span>
-                )}
               </div>
             </div>
 
@@ -726,67 +665,42 @@ export default function RoomsManagement({ onRoomSelect, isAdmin = false }: Rooms
               >
                 View Details
               </button>
-              {isAdmin &&
-                (room.occupancy > 0 ? (
-                  <button
-                    type="button"
-                    disabled
-                    title="Modifier ou supprimer : disponible uniquement lorsque la salle n’est pas occupée."
-                    onClick={(e) => e.stopPropagation()}
-                    className="px-4 py-2 bg-gray-100 text-gray-400 border border-gray-200 rounded-xl font-medium cursor-not-allowed flex items-center justify-center gap-2"
-                    aria-label="Modifier indisponible : salle occupée"
-                  >
-                    <Pencil className="w-4 h-4" />
-                  </button>
-                ) : (
-                  <button
-                    type="button"
-                    title="Modifier la salle"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      setShowAddRoomForm(false);
-                      setAddForm(defaultAddForm());
-                      setAddFormErrors({});
-                      setEditRoomId(room.id);
-                      setEditForm({
-                        name: room.name,
-                        capacity: String(room.capacity),
-                        occupancy: String(room.occupancy),
-                        linkedDeviceId: '',
-                      });
-                      setEditFormErrors({});
-                    }}
-                    className="px-4 py-2 bg-blue-50 text-blue-700 border border-blue-200 rounded-xl font-medium hover:bg-blue-100 transition flex items-center justify-center gap-2"
-                    aria-label={`Modifier la salle ${room.name}`}
-                  >
-                    <Pencil className="w-4 h-4" />
-                  </button>
-                ))}
-              {isAdmin &&
-                (room.occupancy > 0 ? (
-                  <button
-                    type="button"
-                    disabled
-                    title="Impossible de supprimer une salle occupée. Réduire l’occupation à 0 d’abord."
-                    onClick={(e) => e.stopPropagation()}
-                    className="px-4 py-2 bg-gray-100 text-gray-400 border border-gray-200 rounded-xl font-medium cursor-not-allowed flex items-center gap-2"
-                    aria-label="Delete disabled: room is occupied"
-                  >
-                    <Trash2 className="w-4 h-4" />
-                  </button>
-                ) : (
-                  <button
-                    type="button"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      void handleDeleteRoom(room);
-                    }}
-                    className="px-4 py-2 bg-red-50 text-red-600 border border-red-200 rounded-xl font-medium hover:bg-red-100 transition flex items-center gap-2"
-                    aria-label={`Delete room ${room.name}`}
-                  >
-                    <Trash2 className="w-4 h-4" />
-                  </button>
-                ))}
+              {isAdmin && (
+                <button
+                  type="button"
+                  title="Modifier la salle"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setShowAddRoomForm(false);
+                    setAddForm(defaultAddForm());
+                    setAddFormErrors({});
+                    setEditRoomId(room.id);
+                    setEditForm({
+                      name: room.name,
+                      capacity: String(room.capacity),
+                      linkedDeviceId: '',
+                    });
+                    setEditFormErrors({});
+                  }}
+                  className="px-4 py-2 bg-blue-50 text-blue-700 border border-blue-200 rounded-xl font-medium hover:bg-blue-100 transition flex items-center justify-center gap-2"
+                  aria-label={`Modifier la salle ${room.name}`}
+                >
+                  <Pencil className="w-4 h-4" />
+                </button>
+              )}
+              {isAdmin && (
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    void handleDeleteRoom(room);
+                  }}
+                  className="px-4 py-2 bg-red-50 text-red-600 border border-red-200 rounded-xl font-medium hover:bg-red-100 transition flex items-center gap-2"
+                  aria-label={`Delete room ${room.name}`}
+                >
+                  <Trash2 className="w-4 h-4" />
+                </button>
+              )}
             </div>
           </div>
         ))}

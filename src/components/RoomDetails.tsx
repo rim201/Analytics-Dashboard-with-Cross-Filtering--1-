@@ -1,7 +1,6 @@
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import {
   ArrowLeft,
-  Users,
   Thermometer,
   Wind,
   Volume2,
@@ -316,12 +315,6 @@ export default function RoomDetails({ roomId, onBack, isAdmin = false }: RoomDet
               <div className="flex items-center space-x-2">
                 <div className={`w-2 h-2 rounded-full ${roomMeta.status === 'occupied' ? 'bg-blue-500' : 'bg-emerald-500'}`}></div>
                 <span className="text-sm text-gray-600 capitalize">{roomMeta.status}</span>
-              </div>
-              <div className="flex items-center space-x-2">
-                <Users className="w-4 h-4 text-gray-500" />
-                <span className="text-sm text-gray-600">
-                  {roomMeta.occupancy}/{roomMeta.capacity} people
-                </span>
               </div>
               <div className="px-3 py-1 bg-emerald-50 text-emerald-600 rounded-full text-sm font-medium border border-emerald-200">
                 Comfort: {displayComfortScore ?? 0}%
