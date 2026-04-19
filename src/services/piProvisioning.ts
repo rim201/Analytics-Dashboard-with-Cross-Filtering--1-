@@ -15,7 +15,7 @@ const SENSOR_DOC = `Capteurs cibles (broches / ports dans hardware) :
 - SDS011 : qualité de l’air particules PM2.5 + PM10 (UART, champs pm25 / pm10)
 - Capteur CO₂ 0–5000 ppm : UART type MH-Z19 / compatible (champ co2)
 - MAX9814 : niveau sonore via sortie analogique → MCP3008 SPI (champ noise, estimation dB)
-- PIR HC-SR501 : lecture GPIO interne uniquement — **plus de champ motion dans les documents measurements** ; l’état salle = **rooms/{documentId}.occupancy** (0 libre, ≥1 occupé), mis à jour par l’agent. **roomId** dans agent_config.json doit être l’**ID Firestore** de la salle (sans préfixe « room- » si vous le voyez dans l’URL du dashboard ; l’agent accepte les deux formes). OUT → broche BCM hardware.pirGpio (défaut 23 dans le JSON généré ; à adapter à votre câblage), alim module souvent 5 V mais **OUT vers GPIO 3,3 V** uniquement (sortie 5 V sur GPIO = ligne bloquée à « 1 » / dommages — utiliser diviseur ou module 3,3 V). **Réglages module** : potentiomètre **TIME** (durée du signal après détection) — s’il est au maximum la sortie reste haute très longtemps ; le ramener au minimum puis augmenter si besoin. **SENS** : éviter sur-sensibilité (courants d’air). Jumper **L / H** : mode **non répétitif** (single) évite de réarmer en continu. pirSampleMs : courte attente avant lecture (ms). pirPreferGpiozero (défaut true) : lire le PIR avec gpiozero DigitalInputDevice en premier (comme les exemples Raspberry) ; mettre false pour forcer RPi.GPIO en premier. pirOccupancyPollSeconds (défaut 60) : entre deux envois complets, relecture PIR pour l’occupation. syncRoomOccupancyFromPir (défaut true) : **occupancy=1** dès un front GPIO **0→1** (ou premier 1 au boot) ; **occupancy=0** après pirVacancyMinutes (défaut **2**) sans nouveau front, ou si la ligne reste **1** sans jamais repasser à **0** pendant ce délai (HIGH bloqué / faux positif). pirActiveLow / pirPullUp selon le module. pirGpioChip / ROOM_SENSOR_PIR_GPIOCHIP si besoin (gpiodetect).
+- PIR HC-SR501 : lecture GPIO interne uniquement — **plus de champ motion dans les documents measurements** ; l’état salle = **rooms/{documentId}.occupancy** (0 libre, ≥1 occupé), mis à jour par l’agent. **roomId** dans agent_config.json doit être l’**ID Firestore** de la salle (sans préfixe « room- » si vous le voyez dans l’URL du dashboard ; l’agent accepte les deux formes). OUT → broche BCM hardware.pirGpio (défaut 23 dans le JSON généré ; à adapter à votre câblage), alim module souvent 5 V mais **OUT vers GPIO 3,3 V** uniquement (sortie 5 V sur GPIO = ligne bloquée à « 1 » / dommages — utiliser diviseur ou module 3,3 V). **Réglages module** : potentiomètre **TIME** (durée du signal après détection) — s’il est au maximum la sortie reste haute très longtemps ; le ramener au minimum puis augmenter si besoin. **SENS** : éviter sur-sensibilité (courants d’air). Jumper **L / H** : mode **non répétitif** (single) évite de réarmer en continu. pirSampleMs : courte attente avant lecture (ms) hors gpiozero persistant. pirPreferGpiozero (défaut true) : PIR via gpiozero **DigitalInputDevice** ouvert une fois (comme l’exemple officiel : boucle sur motion_sensor.is_active) ; mettre false pour forcer RPi.GPIO en premier (ferme l’instance gpiozero si elle était ouverte). pirOccupancyPollSeconds (défaut **0.5**) : délai entre deux lectures PIR pour l’occupation (secondes, ex. 0.5 comme sleep(0.5) dans les tutos) ; écriture Firestore seulement si occupancy change. syncRoomOccupancyFromPir (défaut true) : **dès** une détection (is_active / mouvement) → **occupancy = 1 envoyée tout de suite** (aucune attente de la minute) ; **sans nouvelle détection** pendant pirVacancyMinutes (défaut **1** min) après la dernière → **0 libre**. pirActiveLow / pirPullUp selon le module. pirGpioChip / ROOM_SENSOR_PIR_GPIOCHIP si besoin (gpiodetect).
 Ports série (hardware dans agent_config.json) :
 - SDS011 sur adaptateur USB → en général /dev/ttyUSB0 (crw-rw---- root:dialout).
 - CO₂ UART sur le port série GPIO → sur Raspberry Pi OS /dev/serial0 pointe vers ttyS0 (ex. lrwxrwxrwx … serial0 -> ttyS0) : utiliser co2SerialDevice /dev/serial0 ou /dev/ttyS0.
@@ -41,8 +41,9 @@ export function buildAgentConfigJson(
         pirActiveLow: false,
         pirSampleMs: 700,
         pirMotionMinFrac: 0.72,
-        pirVacancyMinutes: 2,
-        pirOccupancyPollSeconds: 60,
+        pirVacancyMinutes: 1,
+        /** Intervalle entre deux lectures is_active (ex. 0.5 s, style tuto gpiozero). */
+        pirOccupancyPollSeconds: 0.5,
         /** true : lire le PIR avec gpiozero (DigitalInputDevice) en premier, comme les exemples Raspberry ; false : RPi.GPIO en premier. */
         pirPreferGpiozero: true,
         syncRoomOccupancyFromPir: true,
@@ -70,7 +71,7 @@ export function buildSensorAgentPy(): string {
 Agent salle — envoi mesures vers Firestore (firebase-admin).
 Capteurs : DHT22, BH1750FVI (GY-30), SDS011, CO2 UART (0–5000 ppm), MAX9814+MCP3008, PIR HC-SR501.
 Chaque grandeur : valeur réelle si lisible, sinon null (pas de valeurs simulées).
-Paquets : smbus2, pyserial, spidev, rpi-lgpio (GPIO Pi 5), gpiozero (PIR secours), Blinka + adafruit-circuitpython-dht pour DHT (voir install.sh).
+Paquets : smbus2, pyserial, spidev, rpi-lgpio (GPIO Pi 5), gpiozero (PIR : DigitalInputDevice persistant, is_active), Blinka + adafruit-circuitpython-dht pour DHT (voir install.sh).
 """
 from __future__ import annotations
 
@@ -729,16 +730,30 @@ def _read_pir_lgpio(gpio_pin: int, preferred_gpiochip=None):
 
 
 _PIR_BACKEND_LOGGED = ""
+# Une seule instance DigitalInputDevice (tuto gpiozero : motion_sensor = DigitalInputDevice(23) puis is_active en boucle).
+_PIR_GPIOZERO_DEV = None
+_PIR_GPIOZERO_KEY = None
+_PIR_GPIOZERO_LAST_LOG = None
+# gpiozero très ancien : pas de kw active_high sur DigitalInputDevice → on inverse is_active si pirActiveLow.
+_PIR_GPIOZERO_INVERT = False
 
 
-def _pir_try_gpiozero(
-    gpio_pin: int,
-    internal_pull_up: bool,
-    active_low: bool,
-    settle_s: float,
-):
-    """Comme les exemples Raspberry : DigitalInputDevice sur le BCM hardware.pirGpio + lecture value / is_active. Retourne 0/1 ou None si indisponible."""
-    global _PIR_BACKEND_LOGGED
+def _close_pir_gpiozero_if_open():
+    global _PIR_GPIOZERO_DEV, _PIR_GPIOZERO_KEY, _PIR_GPIOZERO_LAST_LOG, _PIR_GPIOZERO_INVERT
+    if _PIR_GPIOZERO_DEV is not None:
+        try:
+            _PIR_GPIOZERO_DEV.close()
+        except Exception:
+            pass
+    _PIR_GPIOZERO_DEV = None
+    _PIR_GPIOZERO_KEY = None
+    _PIR_GPIOZERO_LAST_LOG = None
+    _PIR_GPIOZERO_INVERT = False
+
+
+def _get_pir_gpiozero_device(gpio_pin: int, internal_pull_up: bool, active_low: bool):
+    """Ouvre une fois DigitalInputDevice ; lectures suivantes = motion_sensor.is_active (sans close à chaque cycle)."""
+    global _PIR_GPIOZERO_DEV, _PIR_GPIOZERO_KEY, _PIR_BACKEND_LOGGED, _PIR_GPIOZERO_INVERT
     import os as _os_gz
 
     _os_gz.environ.setdefault("GPIOZERO_PIN_FACTORY", "lgpio")
@@ -746,43 +761,39 @@ def _pir_try_gpiozero(
         from gpiozero import DigitalInputDevice
     except ImportError:
         return None
+    key = (gpio_pin, bool(internal_pull_up), bool(active_low))
+    if _PIR_GPIOZERO_DEV is not None and _PIR_GPIOZERO_KEY == key:
+        return _PIR_GPIOZERO_DEV
+    _close_pir_gpiozero_if_open()
     pull_order = (True, False) if internal_pull_up else (False, True)
     last_err = None
     for pull_up in pull_order:
         dev = None
         try:
-            dev = DigitalInputDevice(gpio_pin, pull_up=pull_up)
-            if settle_s > 0:
-                time.sleep(settle_s)
-            # Niveau physique : True = ligne haute (identique à digitalRead côté Arduino)
-            line_hi = bool(dev.value)
-            is_act = bool(dev.is_active)
-            dev.close()
-            dev = None
-            saw = _pir_motion_from_line_high(line_hi, active_low)
+            try:
+                dev = DigitalInputDevice(gpio_pin, pull_up=pull_up, active_high=not active_low)
+                _PIR_GPIOZERO_INVERT = False
+            except TypeError:
+                # gpiozero ancien (ex. image Raspberry) : pas d’argument active_high.
+                dev = DigitalInputDevice(gpio_pin, pull_up=pull_up)
+                _PIR_GPIOZERO_INVERT = bool(active_low)
+            time.sleep(0.05)
+            _PIR_GPIOZERO_DEV = dev
+            _PIR_GPIOZERO_KEY = key
             if _PIR_BACKEND_LOGGED != "gpiozero":
                 _PIR_BACKEND_LOGGED = "gpiozero"
+                ah = "logiciel pirActiveLow" if _PIR_GPIOZERO_INVERT else str(not active_low)
                 print(
-                    "PIR: backend gpiozero DigitalInputDevice (BCM",
-                    gpio_pin,
-                    ") — comme exemple Raspberry (pull_up=",
-                    pull_up,
-                    ")",
+                    "PIR: gpiozero DigitalInputDevice(BCM"
+                    + str(gpio_pin)
+                    + ") persistant — active_high="
+                    + ah
+                    + " pull_up="
+                    + str(pull_up)
+                    + " (exemple: while True: motion_sensor.is_active)",
                     flush=True,
                 )
-            print(
-                "PIR gpiozero: value="
-                + str(int(line_hi))
-                + " is_active="
-                + str(int(is_act))
-                + " -> motion="
-                + str(saw)
-                + " (HIGH phys.="
-                + str(line_hi)
-                + ")",
-                flush=True,
-            )
-            return saw
+            return _PIR_GPIOZERO_DEV
         except Exception as e:
             last_err = e
             if dev is not None:
@@ -795,6 +806,26 @@ def _pir_try_gpiozero(
     if last_err is not None:
         print("PIR gpiozero:", last_err, flush=True)
     return None
+
+
+def _read_pir_gpiozero_motion(gpio_pin: int, internal_pull_up: bool, active_low: bool):
+    """0/1 depuis is_active ; log seulement si l’état change (évite spam si poll 0.5 s)."""
+    global _PIR_GPIOZERO_LAST_LOG
+    dev = _get_pir_gpiozero_device(gpio_pin, internal_pull_up, active_low)
+    if dev is None:
+        return None
+    raw = int(bool(dev.is_active))
+    saw = (1 - raw) if _PIR_GPIOZERO_INVERT else raw
+    if _PIR_GPIOZERO_LAST_LOG != saw:
+        _PIR_GPIOZERO_LAST_LOG = saw
+        print(
+            "PIR gpiozero: is_active="
+            + str(saw)
+            + " -> "
+            + ("Somebody here!" if saw else "Monitoring..."),
+            flush=True,
+        )
+    return saw
 
 
 def _read_pir_motion(
@@ -813,9 +844,11 @@ def _read_pir_motion(
     settle_s = min(0.2, sample_ms / 1000.0) if sample_ms > 0 else 0.0
 
     if prefer_gpiozero:
-        gz = _pir_try_gpiozero(gpio_pin, internal_pull_up, active_low, settle_s)
+        gz = _read_pir_gpiozero_motion(gpio_pin, internal_pull_up, active_low)
         if gz is not None:
             return gz
+    else:
+        _close_pir_gpiozero_if_open()
 
     try:
         import RPi.GPIO as GPIO
@@ -882,7 +915,7 @@ def _read_pir_motion(
         return saw_lg
 
     if not prefer_gpiozero:
-        gz2 = _pir_try_gpiozero(gpio_pin, internal_pull_up, active_low, settle_s)
+        gz2 = _read_pir_gpiozero_motion(gpio_pin, internal_pull_up, active_low)
         if gz2 is not None:
             return gz2
     return None
@@ -1056,12 +1089,16 @@ def push_measurement(db, room_id: str, values: dict):
 
 _PIR_LAST_MOTION_WALL = None
 _PUBLISHED_PIR_OCCUPANCY = None
-_PIR_LAST_RAW_STATE = None
+# Dernier échantillon PIR coercé (0/1) : pour détecter un **nouveau** mouvement (0→1) et forcer l’écriture Firestore tout de suite.
+_PREV_PIR_MOTION_COERCED = None
 
 
 def sync_room_occupancy_from_pir(db, room_id: str, cfg: dict, motion):
-    """occupancy=1 sur front GPIO 0->1 (immédiat Firestore) ; 0 après vacance sans front, ou HIGH continu sans 0 (ligne bloquée)."""
-    global _PIR_LAST_MOTION_WALL, _PUBLISHED_PIR_OCCUPANCY, _PIR_LAST_RAW_STATE
+    """
+    Mouvement détecté (m=1) → occupancy=1 **immédiatement** (aucune attente pirVacancyMinutes).
+    Plus aucun m=1 pendant pirVacancyMinutes après la dernière détection → occupancy=0 libre.
+    """
+    global _PIR_LAST_MOTION_WALL, _PUBLISHED_PIR_OCCUPANCY, _PREV_PIR_MOTION_COERCED
     rid = _normalize_firestore_room_id(room_id)
     if not rid:
         return
@@ -1070,38 +1107,23 @@ def sync_room_occupancy_from_pir(db, room_id: str, cfg: dict, motion):
         hw = {}
     if not _cfg_bool(hw, "syncRoomOccupancyFromPir", True):
         return
-    vac_min = max(1, min(180, _cfg_int(hw, "pirVacancyMinutes", 2)))
+    vac_min = max(1, min(180, _cfg_int(hw, "pirVacancyMinutes", 1)))
     vac_s = float(vac_min) * 60.0
     now = time.time()
     cm = _coerce_pir_sample(motion)
     m = 0 if cm is None else cm
-    prev = _PIR_LAST_RAW_STATE
-
+    rising_motion = _PREV_PIR_MOTION_COERCED != 1 and m == 1
+    _PREV_PIR_MOTION_COERCED = m
     if m == 1:
-        if prev is None or prev == 0:
-            _PIR_LAST_MOTION_WALL = now
-            new_occ = 1
-        elif _PIR_LAST_MOTION_WALL is None:
-            new_occ = 0
-        elif (now - _PIR_LAST_MOTION_WALL) >= vac_s:
-            new_occ = 0
-            _PIR_LAST_MOTION_WALL = None
-            print(
-                "PIR: GPIO reste a 1 sans passage a 0 depuis "
-                + str(vac_min)
-                + " min -> occupancy 0 (HIGH bloque ou capteur ; verifier TIME / 3,3 V).",
-                flush=True,
-            )
-        else:
-            new_occ = 1
+        _PIR_LAST_MOTION_WALL = now
+        new_occ = 1
     else:
         if _PIR_LAST_MOTION_WALL is not None and (now - _PIR_LAST_MOTION_WALL) < vac_s:
             new_occ = 1
         else:
             new_occ = 0
-
-    _PIR_LAST_RAW_STATE = m
-    if new_occ == _PUBLISHED_PIR_OCCUPANCY:
+    # Occupé : pousser tout de suite à chaque **nouveau** passage à mouvement (0→1), même si déjà occupé (ex. fin de vacance puis re-mouvement).
+    if new_occ == _PUBLISHED_PIR_OCCUPANCY and not rising_motion:
         return
     try:
         db.collection("rooms").document(rid).set(
@@ -1112,9 +1134,13 @@ def sync_room_occupancy_from_pir(db, room_id: str, cfg: dict, motion):
             merge=True,
         )
         _PUBLISHED_PIR_OCCUPANCY = new_occ
-        msg = "syncRoomOccupancyFromPir: room_id=" + rid + " occupancy -> " + str(int(new_occ))
-        if int(new_occ) == 0 and m == 0:
-            msg += " | salle libre : GPIO 0 ou vacance ecoulee (pirVacancyMinutes=" + str(vac_min) + " min)."
+        if rising_motion:
+            tag = " (mouvement -> occupe tout de suite)"
+        elif new_occ == 1:
+            tag = " (occupe vacance " + str(vac_min) + " min sans nouveau mouvement)"
+        else:
+            tag = " (libre: aucun mouvement depuis " + str(vac_min) + " min)"
+        msg = "syncRoomOccupancyFromPir: room_id=" + rid + " occupancy -> " + str(int(new_occ)) + tag
         print(msg, flush=True)
     except Exception as e:
         print("syncRoomOccupancyFromPir:", e, flush=True)
@@ -1143,76 +1169,81 @@ def main():
     last_push_wall = 0.0
     last_restart_req_wall = 0.0
     last_pir_occ_sync = 0.0
+    # Lecture document devices (capture / restart) : au plus toutes les 30 s pour limiter Firestore ; le PIR peut boucler plus vite.
+    last_device_doc_poll = -1e9
+    DEVICE_DOC_POLL_S = 30.0
 
     while True:
+        now = time.time()
         try:
-            snap = dref.get()
-            data = (snap.to_dict() or {}) if snap.exists else {}
-            rr = data.get("serviceRestartRequestedAt")
-            if rr is not None and hasattr(rr, "timestamp"):
-                ts_rr = float(rr.timestamp())
-                if ts_rr > last_restart_req_wall:
+            if (now - last_device_doc_poll) >= DEVICE_DOC_POLL_S:
+                snap = dref.get()
+                last_device_doc_poll = time.time()
+                data = (snap.to_dict() or {}) if snap.exists else {}
+                rr = data.get("serviceRestartRequestedAt")
+                if rr is not None and hasattr(rr, "timestamp"):
+                    ts_rr = float(rr.timestamp())
+                    if ts_rr > last_restart_req_wall:
+                        try:
+                            dref.update(
+                                {
+                                    "serviceRestartRequestedAt": DELETE_FIELD,
+                                    "lastUpdate": firestore.SERVER_TIMESTAMP,
+                                }
+                            )
+                        except Exception as ex:
+                            print("serviceRestartRequestedAt: effacement impossible:", ex, flush=True)
+                        else:
+                            last_restart_req_wall = ts_rr
+                            print(datetime.now().isoformat(), "relance systemd (serviceRestartRequestedAt)", flush=True)
+                            _trigger_systemd_service_restart()
+                            time.sleep(30)
+                            continue
+                req = data.get("sensorCaptureRequestedAt")
+                force = False
+                if req is not None and hasattr(req, "timestamp"):
+                    if req.timestamp() > last_push_wall:
+                        force = True
+                due = (now - last_cycle) >= interval
+                if due or force:
+                    vals, pir_motion = read_sensors(cfg)
+                    push_measurement(db, room_id, vals)
+                    sync_room_occupancy_from_pir(db, room_id, cfg, pir_motion)
+                    last_pir_occ_sync = time.time()
+                    # update() échoue si le document devices n’existe pas encore — set(merge) suffit pour les horodatages
                     try:
                         dref.update(
                             {
-                                "serviceRestartRequestedAt": DELETE_FIELD,
+                                "lastSensorPushAt": firestore.SERVER_TIMESTAMP,
                                 "lastUpdate": firestore.SERVER_TIMESTAMP,
+                                "sensorCaptureRequestedAt": DELETE_FIELD,
                             }
                         )
-                    except Exception as ex:
-                        print("serviceRestartRequestedAt: effacement impossible:", ex, flush=True)
-                    else:
-                        last_restart_req_wall = ts_rr
-                        print(datetime.now().isoformat(), "relance systemd (serviceRestartRequestedAt)", flush=True)
-                        _trigger_systemd_service_restart()
-                        time.sleep(30)
-                        continue
-            req = data.get("sensorCaptureRequestedAt")
-            now = time.time()
-            force = False
-            if req is not None and hasattr(req, "timestamp"):
-                if req.timestamp() > last_push_wall:
-                    force = True
-            due = (now - last_cycle) >= interval
-            if due or force:
-                vals, pir_motion = read_sensors(cfg)
-                push_measurement(db, room_id, vals)
-                sync_room_occupancy_from_pir(db, room_id, cfg, pir_motion)
-                last_pir_occ_sync = time.time()
-                # update() échoue si le document devices n’existe pas encore — set(merge) suffit pour les horodatages
-                try:
-                    dref.update(
-                        {
-                            "lastSensorPushAt": firestore.SERVER_TIMESTAMP,
-                            "lastUpdate": firestore.SERVER_TIMESTAMP,
-                            "sensorCaptureRequestedAt": DELETE_FIELD,
-                        }
+                    except Exception:
+                        dref.set(
+                            {
+                                "lastSensorPushAt": firestore.SERVER_TIMESTAMP,
+                                "lastUpdate": firestore.SERVER_TIMESTAMP,
+                            },
+                            merge=True,
+                        )
+                    last_cycle = now
+                    last_push_wall = time.time()
+                    print(
+                        datetime.now().isoformat(),
+                        "measurement pushed",
+                        vals,
+                        "pir_gpio_motion=",
+                        pir_motion,
+                        "(0/1 is_active ; occupancy avec pirVacancyMinutes apres dernier 1)",
+                        flush=True,
                     )
-                except Exception:
-                    dref.set(
-                        {
-                            "lastSensorPushAt": firestore.SERVER_TIMESTAMP,
-                            "lastUpdate": firestore.SERVER_TIMESTAMP,
-                        },
-                        merge=True,
-                    )
-                last_cycle = now
-                last_push_wall = time.time()
-                print(
-                    datetime.now().isoformat(),
-                    "measurement pushed",
-                    vals,
-                    "pir_gpio_motion=",
-                    pir_motion,
-                    "(0/1 GPIO ; occupancy=1 sur front 0->1, libre apres vacance ou HIGH bloque)",
-                    flush=True,
-                )
         except Exception as e:
             print("error:", e, flush=True)
         try:
             hw_poll = _hardware_dict(cfg)
             if _cfg_bool(hw_poll, "syncRoomOccupancyFromPir", True):
-                pol = max(15, min(600, _cfg_int(hw_poll, "pirOccupancyPollSeconds", 60)))
+                pol = max(0.25, min(600.0, _cfg_float(hw_poll, "pirOccupancyPollSeconds", 0.5)))
                 if time.time() - last_pir_occ_sync >= pol:
                     pm = poll_pir_motion_only(cfg)
                     if pm is not None:
@@ -1220,7 +1251,16 @@ def main():
                     last_pir_occ_sync = time.time()
         except Exception as e_poll:
             print("pir occupancy poll:", e_poll, flush=True)
-        time.sleep(30)
+        now3 = time.time()
+        until_dev = DEVICE_DOC_POLL_S - (now3 - last_device_doc_poll)
+        hw_sl = _hardware_dict(cfg)
+        if _cfg_bool(hw_sl, "syncRoomOccupancyFromPir", True):
+            pol_sl = max(0.25, min(600.0, _cfg_float(hw_sl, "pirOccupancyPollSeconds", 0.5)))
+            until_pir = pol_sl - (now3 - last_pir_occ_sync)
+        else:
+            until_pir = 1e9
+        sleep_s = max(0.25, min(30.0, min(until_dev, until_pir)))
+        time.sleep(sleep_s)
 
 
 if __name__ == "__main__":
