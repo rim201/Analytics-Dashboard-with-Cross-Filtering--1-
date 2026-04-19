@@ -1,12 +1,14 @@
+import { LUX_IDEAL_MAX, LUX_IDEAL_MIN, PM25_POLLUTED_GT, TEMP_IDEAL_MAX, TEMP_IDEAL_MIN } from './sensorComfortRules';
+
 /** Paramètres dérivés de l’agressivité 1–10 (plus élevé = seuils plus serrés, plus de suggestions). */
 export function thresholdsForAggressiveness(aggressiveness: number) {
   const a = Math.min(10, Math.max(1, Math.round(aggressiveness)));
   return {
     co2High: 620 + (10 - a) * 35,
-    tempHigh: 22.8 + (10 - a) * 0.12,
-    tempLow: 21.2 - (10 - a) * 0.1,
-    lightHigh: 510 + (10 - a) * 18,
-    lightLow: 360 - (10 - a) * 12,
+    tempHigh: TEMP_IDEAL_MAX + (10 - a) * 0.08,
+    tempLow: TEMP_IDEAL_MIN - (10 - a) * 0.08,
+    lightHigh: LUX_IDEAL_MAX + (10 - a) * 15,
+    lightLow: LUX_IDEAL_MIN - (10 - a) * 12,
   };
 }
 
@@ -57,22 +59,22 @@ export function buildAiRecommendationsFromRooms(
         });
       }
     } else if (r.pm25 != null && a >= 4) {
-      if (r.pm25 > 55) {
+      if (r.pm25 > PM25_POLLUTED_GT) {
         out.push({
           roomName: r.name,
-          text: `Particle levels high (PM2.5 ~${r.pm25.toFixed(1)} µg/m³). Improve filtration or ventilation (SDS011).`,
+          text: `Air pollué : PM2.5 ~${r.pm25.toFixed(1)} µg/m³ (> ${PM25_POLLUTED_GT}). Ventilation ou filtration (SDS011).`,
           tone: 'blue',
         });
-      } else if (r.pm25 > 15) {
+      } else if (r.pm25 >= 15) {
         out.push({
           roomName: r.name,
-          text: `PM2.5 moderate (~${r.pm25.toFixed(1)} µg/m³). Acceptable for most uses; monitor sensitive spaces.`,
+          text: `PM2.5 modéré (~${r.pm25.toFixed(1)} µg/m³). Entre seuil « air bon » (< 15) et « pollué » (> ${PM25_POLLUTED_GT}).`,
           tone: 'amber',
         });
       } else {
         out.push({
           roomName: r.name,
-          text: `PM2.5 low (~${r.pm25.toFixed(1)} µg/m³). Particle air quality looks good.`,
+          text: `Air bon : PM2.5 ~${r.pm25.toFixed(1)} µg/m³ (< 15 µg/m³).`,
           tone: 'emerald',
         });
       }
@@ -104,19 +106,19 @@ export function buildAiRecommendationsFromRooms(
       if (r.light > t.lightHigh) {
         out.push({
           roomName: r.name,
-          text: `Reduce lighting: ${Math.round(r.light)} lux is high; dim toward ~500 lx for comfort and energy.`,
+          text: `Luminosité élevée (${Math.round(r.light)} lux). Cible idéale ${LUX_IDEAL_MIN}–${LUX_IDEAL_MAX} lux.`,
           tone: 'amber',
         });
       } else if (r.light < t.lightLow) {
         out.push({
           roomName: r.name,
-          text: `Boost lighting: ${Math.round(r.light)} lux is low for occupied spaces.`,
+          text: `Luminosité faible (${Math.round(r.light)} lux). Cible idéale ${LUX_IDEAL_MIN}–${LUX_IDEAL_MAX} lux.`,
           tone: 'amber',
         });
       } else if (a >= 7) {
         out.push({
           roomName: r.name,
-          text: `Lighting level balanced (${Math.round(r.light)} lux).`,
+          text: `Lumière dans la zone idéale (${Math.round(r.light)} lux, ${LUX_IDEAL_MIN}–${LUX_IDEAL_MAX}).`,
           tone: 'emerald',
         });
       }

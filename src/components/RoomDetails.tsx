@@ -14,6 +14,18 @@ import '../styles/custom.css';
 import { thresholdsForAggressiveness } from '../services/aiRecommendations';
 import { computeComfortScoreFromSensors } from '../services/comfortScore';
 import {
+  PM25_POLLUTED_GT,
+  PM10_GOOD_LT,
+  PM10_POLLUTED_GT,
+  comfortChipToneClass,
+  statusHigherIsWorse,
+  statusLux,
+  statusNoiseDb,
+  statusPm10,
+  statusPm25,
+  statusTemperature,
+} from '../services/sensorComfortRules';
+import {
   getAiConfig,
   subscribeMeasurements,
   subscribeRoomById,
@@ -216,22 +228,43 @@ export default function RoomDetails({ roomId, onBack, isAdmin = false }: RoomDet
       }
     } else if (latest.pm25 != null) {
       const pm = latest.pm25;
-      if (pm > 55) {
+      if (pm > PM25_POLLUTED_GT) {
         messages.push({
-          title: 'Particle load (PM2.5)',
-          text: `${name}: PM2.5 around ${pm.toFixed(1)} µg/m³ (elevated). Consider ventilation or filtration (SDS011).`,
+          title: 'Particules PM2.5',
+          text: `${name}: air pollué (PM2.5 ~${pm.toFixed(1)} µg/m³, seuil > ${PM25_POLLUTED_GT}). Ventilation ou filtration (SDS011).`,
           tone: 'blue',
         });
-      } else if (pm > 15) {
+      } else if (pm >= 15) {
         messages.push({
-          title: 'Particle load (PM2.5)',
-          text: `${name}: PM2.5 moderate (${pm.toFixed(1)} µg/m³). Air acceptable; monitor if sensitive occupants.`,
+          title: 'Particules PM2.5',
+          text: `${name}: PM2.5 modéré (${pm.toFixed(1)} µg/m³). Entre « air bon » (< 15) et « pollué » (> ${PM25_POLLUTED_GT}).`,
           tone: 'blue',
         });
       } else {
         messages.push({
-          title: 'Particle load (PM2.5)',
-          text: `${name}: PM2.5 low (${pm.toFixed(1)} µg/m³). Particle levels look good.`,
+          title: 'Particules PM2.5',
+          text: `${name}: air bon (PM2.5 ~${pm.toFixed(1)} µg/m³ < 15).`,
+          tone: 'blue',
+        });
+      }
+    } else if (latest.pm10 != null) {
+      const p10 = latest.pm10;
+      if (p10 > PM10_POLLUTED_GT) {
+        messages.push({
+          title: 'Particules PM10',
+          text: `${name}: air pollué (PM10 ~${p10.toFixed(1)} µg/m³, seuil > ${PM10_POLLUTED_GT}).`,
+          tone: 'blue',
+        });
+      } else if (p10 >= PM10_GOOD_LT) {
+        messages.push({
+          title: 'Particules PM10',
+          text: `${name}: PM10 modéré (~${p10.toFixed(1)} µg/m³). Seuil « air bon » : < ${PM10_GOOD_LT}.`,
+          tone: 'blue',
+        });
+      } else {
+        messages.push({
+          title: 'Particules PM10',
+          text: `${name}: air bon (PM10 ~${p10.toFixed(1)} µg/m³ < ${PM10_GOOD_LT}).`,
           tone: 'blue',
         });
       }
@@ -252,8 +285,8 @@ export default function RoomDetails({ roomId, onBack, isAdmin = false }: RoomDet
         });
       } else {
         messages.push({
-          title: 'Thermal Balance',
-          text: `${name}: Temperature is in the comfort band (${latest.temperature.toFixed(1)}°C). Keeping current settings.`,
+          title: 'Température',
+          text: `${name}: zone idéale 20–24 °C (${latest.temperature.toFixed(1)}°C).`,
           tone: 'purple',
         });
       }
@@ -262,20 +295,20 @@ export default function RoomDetails({ roomId, onBack, isAdmin = false }: RoomDet
     if (latest.light != null) {
       if (latest.light > t.lightHigh) {
         messages.push({
-          title: 'Lighting Adaptation',
-          text: `${name}: High light intensity (${Math.round(latest.light)} lux). Dimming fixtures to reduce glare and save energy.`,
+          title: 'Luminosité',
+          text: `${name}: ${Math.round(latest.light)} lux — au-dessus de la zone idéale 300–500 lux.`,
           tone: 'green',
         });
       } else if (latest.light < t.lightLow) {
         messages.push({
-          title: 'Lighting Boost',
-          text: `${name}: Low light level (${Math.round(latest.light)} lux). Increasing brightness for visual comfort.`,
+          title: 'Luminosité',
+          text: `${name}: ${Math.round(latest.light)} lux — en dessous de la zone idéale 300–500 lux.`,
           tone: 'green',
         });
       } else {
         messages.push({
-          title: 'Lighting Stable',
-          text: `${name}: Lighting is optimal (${Math.round(latest.light)} lux). No correction required.`,
+          title: 'Luminosité',
+          text: `${name}: zone idéale 300–500 lux (${Math.round(latest.light)} lux).`,
           tone: 'green',
         });
       }
@@ -292,11 +325,18 @@ export default function RoomDetails({ roomId, onBack, isAdmin = false }: RoomDet
     return messages.slice(0, 3);
   }, [latest, roomMeta.name, aiAggressiveness]);
 
-  const getSensorStatus = (value: number, thresholds: { good: number; warning: number }) => {
-    if (value <= thresholds.good) return { color: 'emerald', label: 'Good' };
-    if (value <= thresholds.warning) return { color: 'amber', label: 'Warning' };
-    return { color: 'red', label: 'Alert' };
-  };
+  const statusChips = useMemo(() => {
+    if (!latest) return null;
+    return {
+      temperature: latest.temperature != null ? statusTemperature(latest.temperature) : null,
+      humidity: latest.humidity != null ? statusHigherIsWorse(latest.humidity, 45, 60) : null,
+      co2: latest.co2 != null ? statusHigherIsWorse(latest.co2, 500, 800) : null,
+      noise: latest.noise != null ? statusNoiseDb(latest.noise) : null,
+      light: latest.light != null ? statusLux(latest.light) : null,
+      pm25: latest.pm25 != null ? statusPm25(latest.pm25) : null,
+      pm10: latest.pm10 != null ? statusPm10(latest.pm10) : null,
+    };
+  }, [latest]);
 
   return (
     <div className="space-y-6">
@@ -346,17 +386,9 @@ export default function RoomDetails({ roomId, onBack, isAdmin = false }: RoomDet
             <div className="w-12 h-12 bg-gradient-to-br from-orange-100 to-orange-200 rounded-xl flex items-center justify-center">
               <Thermometer className="w-6 h-6 text-orange-600" />
             </div>
-            {latest?.temperature != null ? (
-              <span
-                className={`px-2 py-1 text-xs font-medium rounded-lg ${
-                  getSensorStatus(latest.temperature, { good: 22, warning: 24 }).color === 'emerald'
-                    ? 'bg-emerald-50 text-emerald-600'
-                    : getSensorStatus(latest.temperature, { good: 22, warning: 24 }).color === 'amber'
-                      ? 'bg-amber-50 text-amber-600'
-                      : 'bg-red-50 text-red-600'
-                }`}
-              >
-                {getSensorStatus(latest.temperature, { good: 22, warning: 24 }).label}
+            {statusChips?.temperature != null ? (
+              <span className={`px-2 py-1 text-xs font-medium rounded-lg ${comfortChipToneClass(statusChips.temperature)}`}>
+                {statusChips.temperature.label}
               </span>
             ) : (
               <span className="px-2 py-1 bg-gray-100 text-gray-500 text-xs font-medium rounded-lg">--</span>
@@ -374,17 +406,9 @@ export default function RoomDetails({ roomId, onBack, isAdmin = false }: RoomDet
             <div className="w-12 h-12 bg-gradient-to-br from-cyan-100 to-cyan-200 rounded-xl flex items-center justify-center">
               <Droplets className="w-6 h-6 text-cyan-600" />
             </div>
-            {latest?.humidity != null ? (
-              <span
-                className={`px-2 py-1 text-xs font-medium rounded-lg ${
-                  getSensorStatus(latest.humidity, { good: 45, warning: 60 }).color === 'emerald'
-                    ? 'bg-emerald-50 text-emerald-600'
-                    : getSensorStatus(latest.humidity, { good: 45, warning: 60 }).color === 'amber'
-                      ? 'bg-amber-50 text-amber-600'
-                      : 'bg-red-50 text-red-600'
-                }`}
-              >
-                {getSensorStatus(latest.humidity, { good: 45, warning: 60 }).label}
+            {statusChips?.humidity != null ? (
+              <span className={`px-2 py-1 text-xs font-medium rounded-lg ${comfortChipToneClass(statusChips.humidity)}`}>
+                {statusChips.humidity.label}
               </span>
             ) : (
               <span className="px-2 py-1 bg-gray-100 text-gray-500 text-xs font-medium rounded-lg">--</span>
@@ -402,17 +426,9 @@ export default function RoomDetails({ roomId, onBack, isAdmin = false }: RoomDet
             <div className="w-12 h-12 bg-gradient-to-br from-blue-100 to-blue-200 rounded-xl flex items-center justify-center">
               <Wind className="w-6 h-6 text-blue-600" />
             </div>
-            {latest?.co2 != null ? (
-              <span
-                className={`px-2 py-1 text-xs font-medium rounded-lg ${
-                  getSensorStatus(latest.co2, { good: 500, warning: 800 }).color === 'emerald'
-                    ? 'bg-emerald-50 text-emerald-600'
-                    : getSensorStatus(latest.co2, { good: 500, warning: 800 }).color === 'amber'
-                      ? 'bg-amber-50 text-amber-600'
-                      : 'bg-red-50 text-red-600'
-                }`}
-              >
-                {getSensorStatus(latest.co2, { good: 500, warning: 800 }).label}
+            {statusChips?.co2 != null ? (
+              <span className={`px-2 py-1 text-xs font-medium rounded-lg ${comfortChipToneClass(statusChips.co2)}`}>
+                {statusChips.co2.label}
               </span>
             ) : (
               <span className="px-2 py-1 bg-gray-100 text-gray-500 text-xs font-medium rounded-lg">--</span>
@@ -430,17 +446,9 @@ export default function RoomDetails({ roomId, onBack, isAdmin = false }: RoomDet
             <div className="w-12 h-12 bg-gradient-to-br from-purple-100 to-purple-200 rounded-xl flex items-center justify-center">
               <Volume2 className="w-6 h-6 text-purple-600" />
             </div>
-            {latest?.noise != null ? (
-              <span
-                className={`px-2 py-1 text-xs font-medium rounded-lg ${
-                  getSensorStatus(latest.noise, { good: 45, warning: 55 }).color === 'emerald'
-                    ? 'bg-emerald-50 text-emerald-600'
-                    : getSensorStatus(latest.noise, { good: 45, warning: 55 }).color === 'amber'
-                      ? 'bg-amber-50 text-amber-600'
-                      : 'bg-red-50 text-red-600'
-                }`}
-              >
-                {getSensorStatus(latest.noise, { good: 45, warning: 55 }).label}
+            {statusChips?.noise != null ? (
+              <span className={`px-2 py-1 text-xs font-medium rounded-lg ${comfortChipToneClass(statusChips.noise)}`}>
+                {statusChips.noise.label}
               </span>
             ) : (
               <span className="px-2 py-1 bg-gray-100 text-gray-500 text-xs font-medium rounded-lg">--</span>
@@ -458,17 +466,9 @@ export default function RoomDetails({ roomId, onBack, isAdmin = false }: RoomDet
             <div className="w-12 h-12 bg-gradient-to-br from-amber-100 to-amber-200 rounded-xl flex items-center justify-center">
               <Sun className="w-6 h-6 text-amber-600" aria-hidden />
             </div>
-            {latest?.light != null ? (
-              <span
-                className={`px-2 py-1 text-xs font-medium rounded-lg ${
-                  getSensorStatus(latest.light, { good: 400, warning: 550 }).color === 'emerald'
-                    ? 'bg-emerald-50 text-emerald-600'
-                    : getSensorStatus(latest.light, { good: 400, warning: 550 }).color === 'amber'
-                      ? 'bg-amber-50 text-amber-600'
-                      : 'bg-red-50 text-red-600'
-                }`}
-              >
-                {getSensorStatus(latest.light, { good: 400, warning: 550 }).label}
+            {statusChips?.light != null ? (
+              <span className={`px-2 py-1 text-xs font-medium rounded-lg ${comfortChipToneClass(statusChips.light)}`}>
+                {statusChips.light.label}
               </span>
             ) : (
               <span className="px-2 py-1 bg-gray-100 text-gray-500 text-xs font-medium rounded-lg">--</span>
@@ -518,17 +518,9 @@ export default function RoomDetails({ roomId, onBack, isAdmin = false }: RoomDet
             <div className="w-12 h-12 bg-gradient-to-br from-slate-100 to-slate-200 rounded-xl flex items-center justify-center">
               <Factory className="w-6 h-6 text-slate-600" aria-hidden />
             </div>
-            {latest?.pm25 != null ? (
-              <span
-                className={`px-2 py-1 text-xs font-medium rounded-lg ${
-                  getSensorStatus(latest.pm25, { good: 15, warning: 55 }).color === 'emerald'
-                    ? 'bg-emerald-50 text-emerald-600'
-                    : getSensorStatus(latest.pm25, { good: 15, warning: 55 }).color === 'amber'
-                      ? 'bg-amber-50 text-amber-600'
-                      : 'bg-red-50 text-red-600'
-                }`}
-              >
-                {getSensorStatus(latest.pm25, { good: 15, warning: 55 }).label}
+            {statusChips?.pm25 != null ? (
+              <span className={`px-2 py-1 text-xs font-medium rounded-lg ${comfortChipToneClass(statusChips.pm25)}`}>
+                {statusChips.pm25.label}
               </span>
             ) : (
               <span className="px-2 py-1 bg-gray-100 text-gray-500 text-xs font-medium rounded-lg">--</span>
@@ -545,17 +537,9 @@ export default function RoomDetails({ roomId, onBack, isAdmin = false }: RoomDet
             <div className="w-12 h-12 bg-gradient-to-br from-zinc-100 to-zinc-200 rounded-xl flex items-center justify-center">
               <Factory className="w-6 h-6 text-zinc-600" aria-hidden />
             </div>
-            {latest?.pm10 != null ? (
-              <span
-                className={`px-2 py-1 text-xs font-medium rounded-lg ${
-                  getSensorStatus(latest.pm10, { good: 45, warning: 100 }).color === 'emerald'
-                    ? 'bg-emerald-50 text-emerald-600'
-                    : getSensorStatus(latest.pm10, { good: 45, warning: 100 }).color === 'amber'
-                      ? 'bg-amber-50 text-amber-600'
-                      : 'bg-red-50 text-red-600'
-                }`}
-              >
-                {getSensorStatus(latest.pm10, { good: 45, warning: 100 }).label}
+            {statusChips?.pm10 != null ? (
+              <span className={`px-2 py-1 text-xs font-medium rounded-lg ${comfortChipToneClass(statusChips.pm10)}`}>
+                {statusChips.pm10.label}
               </span>
             ) : (
               <span className="px-2 py-1 bg-gray-100 text-gray-500 text-xs font-medium rounded-lg">--</span>

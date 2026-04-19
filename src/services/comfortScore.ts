@@ -3,6 +3,15 @@
  * Retourne null si aucune valeur exploitable.
  */
 
+import {
+  LUX_IDEAL_MAX,
+  LUX_IDEAL_MIN,
+  NOISE_CALM_LT,
+  NOISE_OK_LT,
+  TEMP_IDEAL_MAX,
+  TEMP_IDEAL_MIN,
+} from './sensorComfortRules';
+
 function clampScore(n: number): number {
   return Math.max(0, Math.min(100, Math.round(n)));
 }
@@ -19,7 +28,12 @@ export function computeComfortScoreFromSensors(params: {
   const { temperature: t, humidity: h, co2: c, noise: n, light: l } = params;
 
   if (t != null && Number.isFinite(t)) {
-    parts.push(clampScore(100 - Math.abs(t - 22) * 22));
+    if (t >= TEMP_IDEAL_MIN && t <= TEMP_IDEAL_MAX) {
+      parts.push(100);
+    } else {
+      const dist = t < TEMP_IDEAL_MIN ? TEMP_IDEAL_MIN - t : t - TEMP_IDEAL_MAX;
+      parts.push(clampScore(100 - dist * 12));
+    }
   }
   if (h != null && Number.isFinite(h)) {
     parts.push(clampScore(100 - Math.abs(h - 45) * 2.5));
@@ -28,10 +42,21 @@ export function computeComfortScoreFromSensors(params: {
     parts.push(clampScore(100 - Math.max(0, (c - 400) / 10)));
   }
   if (n != null && Number.isFinite(n)) {
-    parts.push(clampScore(100 - Math.max(0, (n - 32) * 3.5)));
+    if (n < NOISE_CALM_LT) {
+      parts.push(100);
+    } else if (n < NOISE_OK_LT) {
+      parts.push(clampScore(100 - (n - NOISE_CALM_LT) * 3));
+    } else {
+      parts.push(clampScore(Math.max(0, 55 - (n - NOISE_OK_LT) * 4)));
+    }
   }
   if (l != null && Number.isFinite(l)) {
-    parts.push(clampScore(100 - Math.abs(l - 450) / 4));
+    if (l >= LUX_IDEAL_MIN && l <= LUX_IDEAL_MAX) {
+      parts.push(100);
+    } else {
+      const dist = l < LUX_IDEAL_MIN ? LUX_IDEAL_MIN - l : l - LUX_IDEAL_MAX;
+      parts.push(clampScore(100 - dist / 5));
+    }
   }
 
   if (parts.length === 0) return null;

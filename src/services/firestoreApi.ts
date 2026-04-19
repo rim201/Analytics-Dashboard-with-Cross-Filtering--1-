@@ -131,10 +131,11 @@ export type DeviceRecord = {
 
 export type DashboardSummary = {
   comfortScore: number;
-  temperature: number;
-  co2: number;
-  noise: number;
-  light: number;
+  /** Moyenne 24 h ; `null` si aucune mesure. */
+  temperature: number | null;
+  co2: number | null;
+  noise: number | null;
+  light: number | null;
   temperatureData: { time: string; value: number }[];
   co2Data: { time: string; value: number }[];
   lightData: { time: string; value: number }[];
@@ -1483,10 +1484,10 @@ export async function fetchDashboardSummary(): Promise<DashboardSummary> {
   const noises = rows.map((r) => r.noise).filter((v): v is number => v != null);
   const lights = rows.map((r) => r.light).filter((v): v is number => v != null);
 
-  const temperature = averageNumbers(temperatures);
-  const co2 = averageNumbers(co2s);
-  const noise = averageNumbers(noises);
-  const light = averageNumbers(lights);
+  const temperature = temperatures.length > 0 ? averageNumbers(temperatures) : null;
+  const co2 = co2s.length > 0 ? averageNumbers(co2s) : null;
+  const noise = noises.length > 0 ? averageNumbers(noises) : null;
+  const light = lights.length > 0 ? averageNumbers(lights) : null;
 
   const comfortScores = rows
     .map((r) =>

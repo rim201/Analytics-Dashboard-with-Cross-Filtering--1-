@@ -1,8 +1,15 @@
-import { Thermometer, Wind, Volume2, Sun, Star, TrendingUp, TrendingDown, Brain } from 'lucide-react';
+import { Thermometer, Wind, Volume2, Sun, Star, Brain } from 'lucide-react';
 import { LineChart, Line, AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { PageType } from '../App';
 import { buildAiRecommendationsFromRooms, type AiDashboardRec } from '../services/aiRecommendations';
+import {
+  comfortChipToneClass,
+  statusHigherIsWorse,
+  statusLux,
+  statusNoiseDb,
+  statusTemperature,
+} from '../services/sensorComfortRules';
 import {
   fetchDashboardSummary,
   getAiConfig,
@@ -21,10 +28,10 @@ function EmptyChartArea() {
 export default function MainDashboard({ onNavigate }: MainDashboardProps) {
   const [summary, setSummary] = useState({
     comfortScore: 0,
-    temperature: 0,
-    co2: 0,
-    noise: 0,
-    light: 0,
+    temperature: null as number | null,
+    co2: null as number | null,
+    noise: null as number | null,
+    light: null as number | null,
     temperatureData: [] as { time: string; value: number }[],
     co2Data: [] as { time: string; value: number }[],
     lightData: [] as { time: string; value: number }[],
@@ -44,10 +51,10 @@ export default function MainDashboard({ onNavigate }: MainDashboardProps) {
         if (cancelled) return;
         setSummary({
           comfortScore: data.comfortScore ?? 0,
-          temperature: data.temperature ?? 0,
-          co2: data.co2 ?? 0,
-          noise: data.noise ?? 0,
-          light: data.light ?? 0,
+          temperature: data.temperature ?? null,
+          co2: data.co2 ?? null,
+          noise: data.noise ?? null,
+          light: data.light ?? null,
           temperatureData: data.temperatureData ?? [],
           co2Data: data.co2Data ?? [],
           lightData: data.lightData ?? [],
@@ -92,6 +99,15 @@ export default function MainDashboard({ onNavigate }: MainDashboardProps) {
     };
   }, []);
 
+  const dashStatus = useMemo(() => {
+    return {
+      temperature: summary.temperature != null ? statusTemperature(summary.temperature) : null,
+      co2: summary.co2 != null ? statusHigherIsWorse(summary.co2, 500, 800) : null,
+      noise: summary.noise != null ? statusNoiseDb(summary.noise) : null,
+      light: summary.light != null ? statusLux(summary.light) : null,
+    };
+  }, [summary.temperature, summary.co2, summary.noise, summary.light]);
+
   return (
     <div className="space-y-6">
       {/* Header Stats */}
@@ -120,12 +136,19 @@ export default function MainDashboard({ onNavigate }: MainDashboardProps) {
             <div className="w-12 h-12 bg-gradient-to-br from-orange-100 to-orange-200 rounded-xl flex items-center justify-center">
               <Thermometer className="w-6 h-6 text-orange-600" />
             </div>
-            <div className="flex items-center space-x-1 text-emerald-600">
-              <TrendingUp className="w-4 h-4" />
-              <span className="text-xs font-medium">Normal</span>
-            </div>
+            {dashStatus.temperature != null ? (
+              <span
+                className={`px-2 py-1 text-xs font-medium rounded-lg ${comfortChipToneClass(dashStatus.temperature)}`}
+              >
+                {dashStatus.temperature.label}
+              </span>
+            ) : (
+              <span className="px-2 py-1 text-xs font-medium rounded-lg bg-gray-100 text-gray-500">--</span>
+            )}
           </div>
-          <div className="text-3xl font-bold text-gray-900">{summary.temperature}°C</div>
+          <div className="text-3xl font-bold text-gray-900">
+            {summary.temperature != null ? `${summary.temperature}°C` : '--'}
+          </div>
           <div className="text-sm text-gray-500">Temperature</div>
           <div className="text-xs text-gray-400 mt-1">24h average · all rooms</div>
         </div>
@@ -136,12 +159,17 @@ export default function MainDashboard({ onNavigate }: MainDashboardProps) {
             <div className="w-12 h-12 bg-gradient-to-br from-blue-100 to-blue-200 rounded-xl flex items-center justify-center">
               <Wind className="w-6 h-6 text-blue-600" />
             </div>
-            <div className="flex items-center space-x-1 text-emerald-600">
-              <TrendingDown className="w-4 h-4" />
-              <span className="text-xs font-medium">Good</span>
-            </div>
+            {dashStatus.co2 != null ? (
+              <span className={`px-2 py-1 text-xs font-medium rounded-lg ${comfortChipToneClass(dashStatus.co2)}`}>
+                {dashStatus.co2.label}
+              </span>
+            ) : (
+              <span className="px-2 py-1 text-xs font-medium rounded-lg bg-gray-100 text-gray-500">--</span>
+            )}
           </div>
-          <div className="text-3xl font-bold text-gray-900">{summary.co2} ppm</div>
+          <div className="text-3xl font-bold text-gray-900">
+            {summary.co2 != null ? `${Math.round(summary.co2)} ppm` : '--'}
+          </div>
           <div className="text-sm text-gray-500">CO₂ Level</div>
           <div className="text-xs text-gray-400 mt-1">24h average · all rooms</div>
         </div>
@@ -152,12 +180,17 @@ export default function MainDashboard({ onNavigate }: MainDashboardProps) {
             <div className="w-12 h-12 bg-gradient-to-br from-purple-100 to-purple-200 rounded-xl flex items-center justify-center">
               <Volume2 className="w-6 h-6 text-purple-600" />
             </div>
-            <div className="flex items-center space-x-1 text-emerald-600">
-              <TrendingDown className="w-4 h-4" />
-              <span className="text-xs font-medium">Quiet</span>
-            </div>
+            {dashStatus.noise != null ? (
+              <span className={`px-2 py-1 text-xs font-medium rounded-lg ${comfortChipToneClass(dashStatus.noise)}`}>
+                {dashStatus.noise.label}
+              </span>
+            ) : (
+              <span className="px-2 py-1 text-xs font-medium rounded-lg bg-gray-100 text-gray-500">--</span>
+            )}
           </div>
-          <div className="text-3xl font-bold text-gray-900">{summary.noise} dB</div>
+          <div className="text-3xl font-bold text-gray-900">
+            {summary.noise != null ? `${Math.round(summary.noise)} dB` : '--'}
+          </div>
           <div className="text-sm text-gray-500">Noise Level</div>
           <div className="text-xs text-gray-400 mt-1">24h average · all rooms</div>
         </div>
@@ -168,12 +201,17 @@ export default function MainDashboard({ onNavigate }: MainDashboardProps) {
             <div className="w-12 h-12 bg-gradient-to-br from-amber-100 to-amber-200 rounded-xl flex items-center justify-center">
               <Sun className="w-6 h-6 text-amber-600" />
             </div>
-            <div className="flex items-center space-x-1 text-emerald-600">
-              <TrendingUp className="w-4 h-4" />
-              <span className="text-xs font-medium">Optimal</span>
-            </div>
+            {dashStatus.light != null ? (
+              <span className={`px-2 py-1 text-xs font-medium rounded-lg ${comfortChipToneClass(dashStatus.light)}`}>
+                {dashStatus.light.label}
+              </span>
+            ) : (
+              <span className="px-2 py-1 text-xs font-medium rounded-lg bg-gray-100 text-gray-500">--</span>
+            )}
           </div>
-          <div className="text-3xl font-bold text-gray-900">{summary.light} lux</div>
+          <div className="text-3xl font-bold text-gray-900">
+            {summary.light != null ? `${Math.round(summary.light)} lux` : '--'}
+          </div>
           <div className="text-sm text-gray-500">Light Intensity</div>
           <div className="text-xs text-gray-400 mt-1">24h average · all rooms</div>
         </div>

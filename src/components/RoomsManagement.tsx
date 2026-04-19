@@ -1,5 +1,15 @@
-import { Search, Filter, Thermometer, Wind, Volume2, Sun, Plus, Trash2, Droplets, Pencil } from 'lucide-react';
+import { Search, Filter, Thermometer, Wind, Volume2, Sun, Plus, Trash2, Droplets, Pencil, Factory } from 'lucide-react';
 import React, { useEffect, useRef, useState } from 'react';
+import {
+  comfortChipToneClass,
+  statusHigherIsWorse,
+  statusLux,
+  statusNoiseDb,
+  statusPm10,
+  statusPm25,
+  statusTemperature,
+  type ComfortStatusChip,
+} from '../services/sensorComfortRules';
 import {
   createRoom,
   deleteRoom,
@@ -15,6 +25,18 @@ import {
 interface RoomsManagementProps {
   onRoomSelect: (roomId: string) => void;
   isAdmin?: boolean;
+}
+
+function comfortPill(value: number | null, statusFn: (v: number) => ComfortStatusChip) {
+  if (value == null) return null;
+  const s = statusFn(value);
+  return (
+    <span
+      className={`mt-0.5 inline-block w-max max-w-full px-1.5 py-0.5 rounded-md text-[10px] font-medium leading-tight ${comfortChipToneClass(s)}`}
+    >
+      {s.label}
+    </span>
+  );
 }
 
 const defaultAddForm = () => ({
@@ -608,6 +630,7 @@ export default function RoomsManagement({ onRoomSelect, isAdmin = false }: Rooms
                     <p className="text-sm font-medium text-gray-900 tabular-nums">
                       {room.temperature != null ? `${room.temperature.toFixed(1)}°C` : '--'}
                     </p>
+                    {comfortPill(room.temperature, statusTemperature)}
                   </div>
                 </div>
                 <div className="flex items-center space-x-2">
@@ -619,6 +642,7 @@ export default function RoomsManagement({ onRoomSelect, isAdmin = false }: Rooms
                     <p className="text-sm font-medium text-gray-900 tabular-nums">
                       {room.humidity != null ? `${Math.round(room.humidity)}%` : '--'}
                     </p>
+                    {comfortPill(room.humidity, (v) => statusHigherIsWorse(v, 45, 60))}
                   </div>
                 </div>
                 <div className="flex items-center space-x-2">
@@ -630,6 +654,7 @@ export default function RoomsManagement({ onRoomSelect, isAdmin = false }: Rooms
                     <p className="text-sm font-medium text-gray-900 tabular-nums">
                       {room.co2 != null ? `${Math.round(room.co2)} ppm` : '--'}
                     </p>
+                    {comfortPill(room.co2, (v) => statusHigherIsWorse(v, 500, 800))}
                   </div>
                 </div>
                 <div className="flex items-center space-x-2">
@@ -641,6 +666,7 @@ export default function RoomsManagement({ onRoomSelect, isAdmin = false }: Rooms
                     <p className="text-sm font-medium text-gray-900 tabular-nums">
                       {room.noise != null ? `${Math.round(room.noise)} dB` : '--'}
                     </p>
+                    {comfortPill(room.noise, statusNoiseDb)}
                   </div>
                 </div>
                 <div className="flex items-center space-x-2 col-span-2">
@@ -652,6 +678,31 @@ export default function RoomsManagement({ onRoomSelect, isAdmin = false }: Rooms
                     <p className="text-sm font-medium text-gray-900 tabular-nums">
                       {room.light != null ? `${Math.round(room.light)} lux` : '--'}
                     </p>
+                    {comfortPill(room.light, statusLux)}
+                  </div>
+                </div>
+                <div className="flex items-center space-x-2">
+                  <div className="w-8 h-8 bg-slate-100 rounded-lg flex items-center justify-center">
+                    <Factory className="w-4 h-4 text-slate-600" aria-hidden />
+                  </div>
+                  <div>
+                    <p className="text-xs text-gray-500">PM2.5</p>
+                    <p className="text-sm font-medium text-gray-900 tabular-nums">
+                      {room.pm25 != null ? `${room.pm25.toFixed(1)}` : '--'}
+                    </p>
+                    {comfortPill(room.pm25, statusPm25)}
+                  </div>
+                </div>
+                <div className="flex items-center space-x-2">
+                  <div className="w-8 h-8 bg-zinc-100 rounded-lg flex items-center justify-center">
+                    <Factory className="w-4 h-4 text-zinc-600" aria-hidden />
+                  </div>
+                  <div>
+                    <p className="text-xs text-gray-500">PM10</p>
+                    <p className="text-sm font-medium text-gray-900 tabular-nums">
+                      {room.pm10 != null ? `${room.pm10.toFixed(1)}` : '--'}
+                    </p>
+                    {comfortPill(room.pm10, statusPm10)}
                   </div>
                 </div>
               </div>
