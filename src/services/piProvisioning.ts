@@ -15,7 +15,7 @@ const SENSOR_DOC = `Capteurs cibles (broches / ports dans hardware) :
 - SDS011 : qualité de l’air particules PM2.5 + PM10 (UART, champs pm25 / pm10)
 - Capteur CO₂ 0–5000 ppm : UART type MH-Z19 / compatible (champ co2)
 - MAX9814 : niveau sonore via sortie analogique → MCP3008 SPI (champ noise, estimation dB)
-- PIR HC-SR501 : lecture GPIO interne uniquement — **plus de champ motion dans les documents measurements** ; l’état salle = **rooms/{documentId}.occupancy** (0 libre, ≥1 occupé), mis à jour par l’agent. **roomId** dans agent_config.json doit être l’**ID Firestore** de la salle (sans préfixe « room- » si vous le voyez dans l’URL du dashboard ; l’agent accepte les deux formes). OUT → broche BCM hardware.pirGpio (défaut 23 dans le JSON généré ; à adapter à votre câblage), alim module souvent 5 V mais **OUT vers GPIO 3,3 V** uniquement (sortie 5 V sur GPIO = ligne bloquée à « 1 » / dommages — utiliser diviseur ou module 3,3 V). **Réglages module** : potentiomètre **TIME** (durée du signal après détection) — s’il est au maximum la sortie reste haute très longtemps ; le ramener au minimum puis augmenter si besoin. **SENS** : éviter sur-sensibilité (courants d’air). Jumper **L / H** : mode **non répétitif** (single) évite de réarmer en continu. pirSampleMs : courte attente avant lecture (ms). pirPreferGpiozero (défaut true) : lire le PIR avec gpiozero DigitalInputDevice en premier (comme les exemples Raspberry) ; mettre false pour forcer RPi.GPIO en premier. pirOccupancyPollSeconds (défaut 60) : entre deux envois complets, relecture PIR pour l’occupation. syncRoomOccupancyFromPir (défaut true) : met **occupancy** à **1 immédiatement** dès lecture GPIO mouvement ; repasse à **0** seulement après pirVacancyMinutes (défaut **2**) **sans** aucune lecture mouvement (rafraîchit la date interne à chaque m=1). pirActiveLow / pirPullUp selon le module. pirGpioChip / ROOM_SENSOR_PIR_GPIOCHIP si besoin (gpiodetect).
+- PIR HC-SR501 : lecture GPIO interne uniquement — **plus de champ motion dans les documents measurements** ; l’état salle = **rooms/{documentId}.occupancy** (0 libre, ≥1 occupé), mis à jour par l’agent. **roomId** dans agent_config.json doit être l’**ID Firestore** de la salle (sans préfixe « room- » si vous le voyez dans l’URL du dashboard ; l’agent accepte les deux formes). OUT → broche BCM hardware.pirGpio (défaut 23 dans le JSON généré ; à adapter à votre câblage), alim module souvent 5 V mais **OUT vers GPIO 3,3 V** uniquement (sortie 5 V sur GPIO = ligne bloquée à « 1 » / dommages — utiliser diviseur ou module 3,3 V). **Réglages module** : potentiomètre **TIME** (durée du signal après détection) — s’il est au maximum la sortie reste haute très longtemps ; le ramener au minimum puis augmenter si besoin. **SENS** : éviter sur-sensibilité (courants d’air). Jumper **L / H** : mode **non répétitif** (single) évite de réarmer en continu. pirSampleMs : courte attente avant lecture (ms). pirPreferGpiozero (défaut true) : lire le PIR avec gpiozero DigitalInputDevice en premier (comme les exemples Raspberry) ; mettre false pour forcer RPi.GPIO en premier. pirOccupancyPollSeconds (défaut 60) : entre deux envois complets, relecture PIR pour l’occupation. syncRoomOccupancyFromPir (défaut true) : **occupancy=1** dès un front GPIO **0→1** (ou premier 1 au boot) ; **occupancy=0** après pirVacancyMinutes (défaut **2**) sans nouveau front, ou si la ligne reste **1** sans jamais repasser à **0** pendant ce délai (HIGH bloqué / faux positif). pirActiveLow / pirPullUp selon le module. pirGpioChip / ROOM_SENSOR_PIR_GPIOCHIP si besoin (gpiodetect).
 Ports série (hardware dans agent_config.json) :
 - SDS011 sur adaptateur USB → en général /dev/ttyUSB0 (crw-rw---- root:dialout).
 - CO₂ UART sur le port série GPIO → sur Raspberry Pi OS /dev/serial0 pointe vers ttyS0 (ex. lrwxrwxrwx … serial0 -> ttyS0) : utiliser co2SerialDevice /dev/serial0 ou /dev/ttyS0.
@@ -1056,11 +1056,12 @@ def push_measurement(db, room_id: str, values: dict):
 
 _PIR_LAST_MOTION_WALL = None
 _PUBLISHED_PIR_OCCUPANCY = None
+_PIR_LAST_RAW_STATE = None
 
 
 def sync_room_occupancy_from_pir(db, room_id: str, cfg: dict, motion):
-    """Firestore occupancy : 1 dès que GPIO mouvement (m=1), sans délai ; 0 seulement après pirVacancyMinutes sans aucun m=1."""
-    global _PIR_LAST_MOTION_WALL, _PUBLISHED_PIR_OCCUPANCY
+    """occupancy=1 sur front GPIO 0->1 (immédiat Firestore) ; 0 après vacance sans front, ou HIGH continu sans 0 (ligne bloquée)."""
+    global _PIR_LAST_MOTION_WALL, _PUBLISHED_PIR_OCCUPANCY, _PIR_LAST_RAW_STATE
     rid = _normalize_firestore_room_id(room_id)
     if not rid:
         return
@@ -1074,14 +1075,32 @@ def sync_room_occupancy_from_pir(db, room_id: str, cfg: dict, motion):
     now = time.time()
     cm = _coerce_pir_sample(motion)
     m = 0 if cm is None else cm
+    prev = _PIR_LAST_RAW_STATE
+
     if m == 1:
-        _PIR_LAST_MOTION_WALL = now
-        new_occ = 1
+        if prev is None or prev == 0:
+            _PIR_LAST_MOTION_WALL = now
+            new_occ = 1
+        elif _PIR_LAST_MOTION_WALL is None:
+            new_occ = 0
+        elif (now - _PIR_LAST_MOTION_WALL) >= vac_s:
+            new_occ = 0
+            _PIR_LAST_MOTION_WALL = None
+            print(
+                "PIR: GPIO reste a 1 sans passage a 0 depuis "
+                + str(vac_min)
+                + " min -> occupancy 0 (HIGH bloque ou capteur ; verifier TIME / 3,3 V).",
+                flush=True,
+            )
+        else:
+            new_occ = 1
     else:
         if _PIR_LAST_MOTION_WALL is not None and (now - _PIR_LAST_MOTION_WALL) < vac_s:
             new_occ = 1
         else:
             new_occ = 0
+
+    _PIR_LAST_RAW_STATE = m
     if new_occ == _PUBLISHED_PIR_OCCUPANCY:
         return
     try:
@@ -1094,12 +1113,8 @@ def sync_room_occupancy_from_pir(db, room_id: str, cfg: dict, motion):
         )
         _PUBLISHED_PIR_OCCUPANCY = new_occ
         msg = "syncRoomOccupancyFromPir: room_id=" + rid + " occupancy -> " + str(int(new_occ))
-        if int(new_occ) == 0 and m == 0 and _PIR_LAST_MOTION_WALL is not None:
-            msg += (
-                " | salle libre : aucun GPIO mouvement depuis "
-                + str(vac_min)
-                + " min (pirVacancyMinutes)."
-            )
+        if int(new_occ) == 0 and m == 0:
+            msg += " | salle libre : GPIO 0 ou vacance ecoulee (pirVacancyMinutes=" + str(vac_min) + " min)."
         print(msg, flush=True)
     except Exception as e:
         print("syncRoomOccupancyFromPir:", e, flush=True)
@@ -1189,7 +1204,7 @@ def main():
                     vals,
                     "pir_gpio_motion=",
                     pir_motion,
-                    "(0/1 lecture GPIO ; occupancy=1 immédiat si 1, libre après vacance sans 1)",
+                    "(0/1 GPIO ; occupancy=1 sur front 0->1, libre apres vacance ou HIGH bloque)",
                     flush=True,
                 )
         except Exception as e:
