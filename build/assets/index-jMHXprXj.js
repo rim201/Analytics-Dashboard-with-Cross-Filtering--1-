@@ -5221,11 +5221,11 @@ Cette action est irréversible. Cliquez sur OK pour supprimer, ou Annuler pour n
 - SDS011 : qualité de l’air particules PM2.5 + PM10 (UART, champs pm25 / pm10)
 - Capteur CO₂ 0–5000 ppm : UART type MH-Z19 / compatible (champ co2)
 - MAX9814 : niveau sonore via sortie analogique → MCP3008 SPI (champ noise, estimation dB)
-- PIR HC-SR501 : lecture GPIO interne uniquement — **plus de champ motion dans les documents measurements** ; l’état salle = **rooms/{documentId}.occupancy** (0 libre, ≥1 occupé), mis à jour par l’agent. **roomId** dans agent_config.json doit être l’**ID Firestore** de la salle (sans préfixe « room- » si vous le voyez dans l’URL du dashboard ; l’agent accepte les deux formes). OUT → broche BCM hardware.pirGpio (défaut 23 dans le JSON généré ; à adapter à votre câblage), alim module souvent 5 V mais **OUT vers GPIO 3,3 V** uniquement (sortie 5 V sur GPIO = ligne bloquée à « 1 » / dommages — utiliser diviseur ou module 3,3 V). **Réglages module** : potentiomètre **TIME** (durée du signal après détection) — s’il est au maximum la sortie reste haute très longtemps ; le ramener au minimum puis augmenter si besoin. **SENS** : éviter sur-sensibilité (courants d’air). Jumper **L / H** : mode **non répétitif** (single) évite de réarmer en continu. pirSampleMs : courte attente avant lecture (ms) hors gpiozero persistant. pirPreferGpiozero (défaut true) : PIR via gpiozero **DigitalInputDevice** ouvert une fois (comme l’exemple officiel : boucle sur motion_sensor.is_active) ; mettre false pour forcer RPi.GPIO en premier (ferme l’instance gpiozero si elle était ouverte). pirOccupancyPollSeconds (défaut **0.5**) : délai entre deux lectures PIR pour l’occupation (secondes, ex. 0.5 comme sleep(0.5) dans les tutos) ; écriture Firestore seulement si occupancy change. syncRoomOccupancyFromPir (défaut true) : **dès** une détection (is_active / mouvement) → **occupancy = 1 envoyée tout de suite** (aucune attente de la minute) ; **sans nouvelle détection** pendant pirVacancyMinutes (défaut **1** min) après la dernière → **0 libre**. pirActiveLow / pirPullUp selon le module. pirGpioChip / ROOM_SENSOR_PIR_GPIOCHIP si besoin (gpiodetect).
+- PIR HC-SR501 : lecture GPIO interne uniquement — **plus de champ motion dans les documents measurements** ; l’état salle = **rooms/{documentId}.occupancy** (0 libre, ≥1 occupé), mis à jour par l’agent. **roomId** dans agent_config.json doit être l’**ID Firestore** de la salle (sans préfixe « room- » si vous le voyez dans l’URL du dashboard ; l’agent accepte les deux formes). OUT → broche BCM hardware.pirGpio (défaut 23 dans le JSON généré ; à adapter à votre câblage), alim module souvent 5 V mais **OUT vers GPIO 3,3 V** uniquement (sortie 5 V sur GPIO = ligne bloquée à « 1 » / dommages — utiliser diviseur ou module 3,3 V). **Réglages module** : potentiomètre **TIME** (durée du signal après détection) — s’il est au maximum la sortie reste haute très longtemps ; le ramener au minimum puis augmenter si besoin. **SENS** : éviter sur-sensibilité (courants d’air). Jumper **L / H** : mode **non répétitif** (single) évite de réarmer en continu. pirSampleMs : courte attente avant lecture (ms) hors gpiozero persistant. pirPreferGpiozero (défaut true) : PIR via gpiozero **DigitalInputDevice** ouvert une fois (comme l’exemple officiel : boucle sur motion_sensor.is_active) ; mettre false pour forcer RPi.GPIO en premier (ferme l’instance gpiozero si elle était ouverte). pirOccupancyPollSeconds (défaut **0.5**) : délai entre deux lectures PIR pour l’occupation (secondes, ex. 0.5 comme sleep(0.5) dans les tutos) ; écriture Firestore seulement si occupancy change. syncRoomOccupancyFromPir (défaut true) : **dès** une détection (is_active / mouvement) → **occupancy = 1 envoyée tout de suite** (aucune attente de la minute) ; **sans nouvelle détection** pendant pirVacancyMinutes (défaut **1** min) après la dernière → **0 libre**. **pirMotionCooldownSeconds** (défaut **5** s) : anti-fausse détection — on ne **rafraîchit** l’horodatage « dernier mouvement » (vacance) qu’au plus une fois par ce délai tant que la ligne reste active (même idée qu’un script RPi.GPIO : lecture HIGH + délai minimum entre deux prises en compte) ; réduit la sensibilité logicielle sans changer le câblage. pirActiveLow / pirPullUp selon le module. pirGpioChip / ROOM_SENSOR_PIR_GPIOCHIP si besoin (gpiodetect).
 Ports série (hardware dans agent_config.json) :
 - SDS011 sur adaptateur USB → en général /dev/ttyUSB0 (crw-rw---- root:dialout).
 - CO₂ UART sur le port série GPIO → sur Raspberry Pi OS /dev/serial0 pointe vers ttyS0 (ex. lrwxrwxrwx … serial0 -> ttyS0) : utiliser co2SerialDevice /dev/serial0 ou /dev/ttyS0.
-L’utilisateur du service (souvent « pi ») doit être dans le groupe dialout : sudo usermod -aG dialout pi puis reconnexion.`;function y0e(t,e=m0e){return`${JSON.stringify({firebaseClient:pP,deviceDocId:t.deviceDocId,roomId:t.roomId,intervalSeconds:e,sensors:g0e,hardware:{dht22Gpio:4,pirGpio:23,pirGpioChip:null,pirPullUp:!1,pirActiveLow:!1,pirSampleMs:700,pirMotionMinFrac:.72,pirVacancyMinutes:1,pirOccupancyPollSeconds:.5,pirPreferGpiozero:!0,syncRoomOccupancyFromPir:!0,bh1750I2cBus:1,bh1750I2cAddr:35,sds011SerialDevice:"/dev/ttyUSB0",co2SerialDevice:"/dev/serial0",mcp3008SpiBus:0,mcp3008SpiDevice:0,max9814McpChannel:0,max9814SampleCount:400,max9814NoiseGain:.09,max9814NoiseFloorDb:34}},null,2)}
+L’utilisateur du service (souvent « pi ») doit être dans le groupe dialout : sudo usermod -aG dialout pi puis reconnexion.`;function y0e(t,e=m0e){return`${JSON.stringify({firebaseClient:pP,deviceDocId:t.deviceDocId,roomId:t.roomId,intervalSeconds:e,sensors:g0e,hardware:{dht22Gpio:4,pirGpio:23,pirGpioChip:null,pirPullUp:!1,pirActiveLow:!1,pirSampleMs:700,pirMotionMinFrac:.72,pirVacancyMinutes:1,pirMotionCooldownSeconds:5,pirOccupancyPollSeconds:.5,pirPreferGpiozero:!0,syncRoomOccupancyFromPir:!0,bh1750I2cBus:1,bh1750I2cAddr:35,sds011SerialDevice:"/dev/ttyUSB0",co2SerialDevice:"/dev/serial0",mcp3008SpiBus:0,mcp3008SpiDevice:0,max9814McpChannel:0,max9814SampleCount:400,max9814NoiseGain:.09,max9814NoiseFloorDb:34}},null,2)}
 `}function v0e(){return`#!/usr/bin/env python3
 """
 Agent salle — envoi mesures vers Firestore (firebase-admin).
@@ -6251,14 +6251,18 @@ _PIR_LAST_MOTION_WALL = None
 _PUBLISHED_PIR_OCCUPANCY = None
 # Dernier échantillon PIR coercé (0/1) : pour détecter un **nouveau** mouvement (0→1) et forcer l’écriture Firestore tout de suite.
 _PREV_PIR_MOTION_COERCED = None
+# Dernier instant où un « pic » mouvement a été accepté pour le cooldown (réduit sensibilité / rafales).
+_PIR_LAST_DEBOUNCED_MOTION_ACCEPT = None
 
 
 def sync_room_occupancy_from_pir(db, room_id: str, cfg: dict, motion):
     """
     Mouvement détecté (m=1) → occupancy=1 **immédiatement** (aucune attente pirVacancyMinutes).
     Plus aucun m=1 pendant pirVacancyMinutes après la dernière détection → occupancy=0 libre.
+    pirMotionCooldownSeconds : ne rafraîchit le « dernier mouvement » (horloge vacance) qu’au plus une fois
+    par ce délai si la ligne reste à 1 (équivalent tuto RPi.GPIO : if input and time-last > delay).
     """
-    global _PIR_LAST_MOTION_WALL, _PUBLISHED_PIR_OCCUPANCY, _PREV_PIR_MOTION_COERCED
+    global _PIR_LAST_MOTION_WALL, _PUBLISHED_PIR_OCCUPANCY, _PREV_PIR_MOTION_COERCED, _PIR_LAST_DEBOUNCED_MOTION_ACCEPT
     rid = _normalize_firestore_room_id(room_id)
     if not rid:
         return
@@ -6269,13 +6273,16 @@ def sync_room_occupancy_from_pir(db, room_id: str, cfg: dict, motion):
         return
     vac_min = max(1, min(180, _cfg_int(hw, "pirVacancyMinutes", 1)))
     vac_s = float(vac_min) * 60.0
+    cooldown_s = max(0.5, min(120.0, _cfg_float(hw, "pirMotionCooldownSeconds", 5.0)))
     now = time.time()
     cm = _coerce_pir_sample(motion)
     m = 0 if cm is None else cm
     rising_motion = _PREV_PIR_MOTION_COERCED != 1 and m == 1
     _PREV_PIR_MOTION_COERCED = m
     if m == 1:
-        _PIR_LAST_MOTION_WALL = now
+        if _PIR_LAST_DEBOUNCED_MOTION_ACCEPT is None or (now - _PIR_LAST_DEBOUNCED_MOTION_ACCEPT) >= cooldown_s:
+            _PIR_LAST_MOTION_WALL = now
+            _PIR_LAST_DEBOUNCED_MOTION_ACCEPT = now
         new_occ = 1
     else:
         if _PIR_LAST_MOTION_WALL is not None and (now - _PIR_LAST_MOTION_WALL) < vac_s:
