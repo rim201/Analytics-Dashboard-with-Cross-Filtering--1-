@@ -1,4 +1,4 @@
-/** Seuils d’affichage / confort (particules, température, lux, bruit). */
+/** Seuils d’affichage / confort (particules, température, humidité, lux, bruit). */
 
 export const PM25_GOOD_LT = 15;
 export const PM25_POLLUTED_GT = 35;
@@ -14,6 +14,10 @@ export const LUX_IDEAL_MAX = 500;
 /** dB : calme < 40 ; acceptable 40 ≤ dB < 60 ; bruyant ≥ 60. */
 export const NOISE_CALM_LT = 40;
 export const NOISE_OK_LT = 60;
+
+/** Humidité relative (%) : zone confort courante intérieur. */
+export const HUMIDITY_IDEAL_MIN = 40;
+export const HUMIDITY_IDEAL_MAX = 60;
 
 export type ComfortStatusChip = {
   color: 'emerald' | 'amber' | 'red';
@@ -61,7 +65,21 @@ export function statusNoiseDb(v: number): ComfortStatusChip {
   return { color: 'red', label: 'Bruyant \u274C' };
 }
 
-/** CO₂, humidité, etc. : plus la valeur est haute, plus c’est mauvais. */
+/**
+ * Humidité % : idéal 40–60 (trop sec en dessous, trop humide au-dessus).
+ * Ambre : 35–<40 ou >60–70 % ; rouge : <35 ou >70 %.
+ */
+export function statusHumidityPct(v: number): ComfortStatusChip {
+  if (v >= HUMIDITY_IDEAL_MIN && v <= HUMIDITY_IDEAL_MAX) {
+    return { color: 'emerald', label: 'Zone idéale' };
+  }
+  if ((v >= 35 && v < HUMIDITY_IDEAL_MIN) || (v > HUMIDITY_IDEAL_MAX && v <= 70)) {
+    return { color: 'amber', label: 'À ajuster' };
+  }
+  return { color: 'red', label: 'Hors zone' };
+}
+
+/** CO₂ : plus la valeur est haute, plus c’est mauvais (seuils ppm). */
 export function statusHigherIsWorse(value: number, good: number, warn: number): ComfortStatusChip {
   if (value <= good) return { color: 'emerald', label: 'Bon' };
   if (value <= warn) return { color: 'amber', label: 'Modéré' };

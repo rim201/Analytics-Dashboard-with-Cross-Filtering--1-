@@ -3,6 +3,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import {
   comfortChipToneClass,
   statusHigherIsWorse,
+  statusHumidityPct,
   statusLux,
   statusNoiseDb,
   statusPm10,
@@ -642,7 +643,7 @@ export default function RoomsManagement({ onRoomSelect, isAdmin = false }: Rooms
                     <p className="text-sm font-medium text-gray-900 tabular-nums">
                       {room.humidity != null ? `${Math.round(room.humidity)}%` : '--'}
                     </p>
-                    {comfortPill(room.humidity, (v) => statusHigherIsWorse(v, 45, 60))}
+                    {comfortPill(room.humidity, statusHumidityPct)}
                   </div>
                 </div>
                 <div className="flex items-center space-x-2">

@@ -1,4 +1,4 @@
-import { Thermometer, Wind, Volume2, Sun, Star, Brain } from 'lucide-react';
+import { Thermometer, Wind, Volume2, Sun, Star, Brain, Droplets } from 'lucide-react';
 import { LineChart, Line, AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
 import React, { useEffect, useMemo, useState } from 'react';
 import { PageType } from '../App';
@@ -6,6 +6,7 @@ import { buildAiRecommendationsFromRooms, type AiDashboardRec } from '../service
 import {
   comfortChipToneClass,
   statusHigherIsWorse,
+  statusHumidityPct,
   statusLux,
   statusNoiseDb,
   statusTemperature,
@@ -29,6 +30,7 @@ export default function MainDashboard({ onNavigate }: MainDashboardProps) {
   const [summary, setSummary] = useState({
     comfortScore: 0,
     temperature: null as number | null,
+    humidity: null as number | null,
     co2: null as number | null,
     noise: null as number | null,
     light: null as number | null,
@@ -52,6 +54,7 @@ export default function MainDashboard({ onNavigate }: MainDashboardProps) {
         setSummary({
           comfortScore: data.comfortScore ?? 0,
           temperature: data.temperature ?? null,
+          humidity: data.humidity ?? null,
           co2: data.co2 ?? null,
           noise: data.noise ?? null,
           light: data.light ?? null,
@@ -102,16 +105,17 @@ export default function MainDashboard({ onNavigate }: MainDashboardProps) {
   const dashStatus = useMemo(() => {
     return {
       temperature: summary.temperature != null ? statusTemperature(summary.temperature) : null,
+      humidity: summary.humidity != null ? statusHumidityPct(summary.humidity) : null,
       co2: summary.co2 != null ? statusHigherIsWorse(summary.co2, 500, 800) : null,
       noise: summary.noise != null ? statusNoiseDb(summary.noise) : null,
       light: summary.light != null ? statusLux(summary.light) : null,
     };
-  }, [summary.temperature, summary.co2, summary.noise, summary.light]);
+  }, [summary.temperature, summary.humidity, summary.co2, summary.noise, summary.light]);
 
   return (
     <div className="space-y-6">
       {/* Header Stats */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4">
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-6 gap-4">
         {/* Comfort Score */}
         <div className="bg-gradient-to-br from-emerald-500 to-emerald-600 rounded-2xl p-6 text-white shadow-xl col-span-1 md:col-span-2 lg:col-span-1">
           <div className="flex items-center justify-between mb-4">
@@ -150,6 +154,29 @@ export default function MainDashboard({ onNavigate }: MainDashboardProps) {
             {summary.temperature != null ? `${summary.temperature}°C` : '--'}
           </div>
           <div className="text-sm text-gray-500">Temperature</div>
+          <div className="text-xs text-gray-400 mt-1">24h average · all rooms</div>
+        </div>
+
+        {/* Humidity */}
+        <div className="bg-white rounded-2xl p-6 shadow-lg border border-gray-100">
+          <div className="flex items-center justify-between mb-4">
+            <div className="w-12 h-12 bg-gradient-to-br from-cyan-100 to-cyan-200 rounded-xl flex items-center justify-center">
+              <Droplets className="w-6 h-6 text-cyan-600" />
+            </div>
+            {dashStatus.humidity != null ? (
+              <span
+                className={`px-2 py-1 text-xs font-medium rounded-lg ${comfortChipToneClass(dashStatus.humidity)}`}
+              >
+                {dashStatus.humidity.label}
+              </span>
+            ) : (
+              <span className="px-2 py-1 text-xs font-medium rounded-lg bg-gray-100 text-gray-500">--</span>
+            )}
+          </div>
+          <div className="text-3xl font-bold text-gray-900">
+            {summary.humidity != null ? `${Math.round(summary.humidity)}%` : '--'}
+          </div>
+          <div className="text-sm text-gray-500">Humidity</div>
           <div className="text-xs text-gray-400 mt-1">24h average · all rooms</div>
         </div>
 

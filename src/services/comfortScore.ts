@@ -4,6 +4,8 @@
  */
 
 import {
+  HUMIDITY_IDEAL_MAX,
+  HUMIDITY_IDEAL_MIN,
   LUX_IDEAL_MAX,
   LUX_IDEAL_MIN,
   NOISE_CALM_LT,
@@ -36,7 +38,12 @@ export function computeComfortScoreFromSensors(params: {
     }
   }
   if (h != null && Number.isFinite(h)) {
-    parts.push(clampScore(100 - Math.abs(h - 45) * 2.5));
+    if (h >= HUMIDITY_IDEAL_MIN && h <= HUMIDITY_IDEAL_MAX) {
+      parts.push(100);
+    } else {
+      const dist = h < HUMIDITY_IDEAL_MIN ? HUMIDITY_IDEAL_MIN - h : h - HUMIDITY_IDEAL_MAX;
+      parts.push(clampScore(100 - dist * 2.8));
+    }
   }
   if (c != null && Number.isFinite(c)) {
     parts.push(clampScore(100 - Math.max(0, (c - 400) / 10)));

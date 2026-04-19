@@ -133,6 +133,7 @@ export type DashboardSummary = {
   comfortScore: number;
   /** Moyenne 24 h ; `null` si aucune mesure. */
   temperature: number | null;
+  humidity: number | null;
   co2: number | null;
   noise: number | null;
   light: number | null;
@@ -1480,11 +1481,13 @@ export async function fetchDashboardSummary(): Promise<DashboardSummary> {
   const rows = await fetchMeasurementsMergedLast24h(rooms, since, sinceTs);
 
   const temperatures = rows.map((r) => r.temperature).filter((v): v is number => v != null);
+  const humidities = rows.map((r) => r.humidity).filter((v): v is number => v != null);
   const co2s = rows.map((r) => r.co2).filter((v): v is number => v != null);
   const noises = rows.map((r) => r.noise).filter((v): v is number => v != null);
   const lights = rows.map((r) => r.light).filter((v): v is number => v != null);
 
   const temperature = temperatures.length > 0 ? averageNumbers(temperatures) : null;
+  const humidity = humidities.length > 0 ? averageNumbers(humidities) : null;
   const co2 = co2s.length > 0 ? averageNumbers(co2s) : null;
   const noise = noises.length > 0 ? averageNumbers(noises) : null;
   const light = lights.length > 0 ? averageNumbers(lights) : null;
@@ -1553,6 +1556,7 @@ export async function fetchDashboardSummary(): Promise<DashboardSummary> {
   return {
     comfortScore,
     temperature,
+    humidity,
     co2,
     noise,
     light,

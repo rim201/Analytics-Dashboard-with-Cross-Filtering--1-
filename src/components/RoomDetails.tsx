@@ -19,6 +19,7 @@ import {
   PM10_POLLUTED_GT,
   comfortChipToneClass,
   statusHigherIsWorse,
+  statusHumidityPct,
   statusLux,
   statusNoiseDb,
   statusPm10,
@@ -329,7 +330,7 @@ export default function RoomDetails({ roomId, onBack, isAdmin = false }: RoomDet
     if (!latest) return null;
     return {
       temperature: latest.temperature != null ? statusTemperature(latest.temperature) : null,
-      humidity: latest.humidity != null ? statusHigherIsWorse(latest.humidity, 45, 60) : null,
+      humidity: latest.humidity != null ? statusHumidityPct(latest.humidity) : null,
       co2: latest.co2 != null ? statusHigherIsWorse(latest.co2, 500, 800) : null,
       noise: latest.noise != null ? statusNoiseDb(latest.noise) : null,
       light: latest.light != null ? statusLux(latest.light) : null,
