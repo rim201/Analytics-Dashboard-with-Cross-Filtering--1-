@@ -115,9 +115,9 @@ export default function MainDashboard({ onNavigate }: MainDashboardProps) {
   return (
     <div className="space-y-6">
       {/* Header Stats */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-6 gap-4">
+      <div className="grid grid-cols-1 gap-4">
         {/* Comfort Score */}
-        <div className="bg-gradient-to-br from-emerald-500 to-emerald-600 rounded-2xl p-6 text-white shadow-xl col-span-1 md:col-span-2 lg:col-span-1">
+        <div className="bg-gradient-to-br from-emerald-500 to-emerald-600 rounded-2xl p-6 text-white shadow-xl">
           <div className="flex items-center justify-between mb-4">
             <Star className="w-6 h-6" />
             <span className="text-sm font-medium opacity-90">Overall</span>
@@ -134,6 +134,7 @@ export default function MainDashboard({ onNavigate }: MainDashboardProps) {
           </div>
         </div>
 
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4">
         {/* Temperature */}
         <div className="bg-white rounded-2xl p-6 shadow-lg border border-gray-100">
           <div className="flex items-center justify-between mb-4">
@@ -241,6 +242,7 @@ export default function MainDashboard({ onNavigate }: MainDashboardProps) {
           </div>
           <div className="text-sm text-gray-500">Light Intensity</div>
           <div className="text-xs text-gray-400 mt-1">24h average · all rooms</div>
+        </div>
         </div>
       </div>
 

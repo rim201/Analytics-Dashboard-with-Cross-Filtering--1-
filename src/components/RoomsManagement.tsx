@@ -597,7 +597,7 @@ export default function RoomsManagement({ onRoomSelect, isAdmin = false }: Rooms
         {filteredRooms.map((room) => (
           <div
             key={room.id}
-            className="bg-white rounded-2xl shadow-lg border border-gray-100 overflow-hidden hover:shadow-xl transition cursor-pointer"
+            className="bg-white rounded-2xl shadow-lg border border-gray-100 overflow-hidden hover:shadow-xl transition cursor-pointer h-full flex flex-col"
             onClick={() => onRoomSelect(`room-${room.id}`)}
           >
             {/* Room Header */}
@@ -620,7 +620,7 @@ export default function RoomsManagement({ onRoomSelect, isAdmin = false }: Rooms
             </div>
 
             {/* Capteurs : dernière mesure (date/heure) ; pas de donnée → -- */}
-            <div className="p-6 bg-gray-50">
+            <div className="p-6 bg-gray-50 flex-1">
               <div className="grid grid-cols-2 gap-4">
                 <div className="flex items-center space-x-2">
                   <div className="w-8 h-8 bg-orange-100 rounded-lg flex items-center justify-center">
@@ -710,9 +710,13 @@ export default function RoomsManagement({ onRoomSelect, isAdmin = false }: Rooms
             </div>
 
             {/* Action Buttons */}
-            <div className="p-4 bg-gray-50 border-t border-gray-100 flex flex-wrap gap-2">
+            <div className="p-4 bg-gray-50 border-t border-gray-100 mt-auto flex flex-wrap gap-2">
               <button
                 type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onRoomSelect(`room-${room.id}`);
+                }}
                 className="flex-1 min-w-[8rem] px-4 py-2 bg-emerald-500 text-white rounded-xl font-medium hover:bg-emerald-600 transition"
               >
                 View Details
@@ -747,7 +751,7 @@ export default function RoomsManagement({ onRoomSelect, isAdmin = false }: Rooms
                     e.stopPropagation();
                     void handleDeleteRoom(room);
                   }}
-                  className="px-4 py-2 bg-red-50 text-red-600 border border-red-200 rounded-xl font-medium hover:bg-red-100 transition flex items-center gap-2"
+                  className="px-4 py-2 bg-red-50 text-red-600 border border-red-200 rounded-xl font-medium hover:bg-red-100 transition flex items-center justify-center gap-2"
                   aria-label={`Delete room ${room.name}`}
                 >
                   <Trash2 className="w-4 h-4" />
