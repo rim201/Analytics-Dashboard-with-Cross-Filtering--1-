@@ -23,7 +23,7 @@ import { validateDeviceIpAddress } from '../utils/deviceIpValidation';
 import type { AppRole } from './auth';
 import { computeComfortScoreFromSensors } from './comfortScore';
 
-// —— Types (alignés avec l’ancienne API Django) —— //
+// —— Types (alignés avec l'ancienne API Django) —— //
 
 /** Document `rooms` : métadonnées uniquement — capteurs dans `rooms/{id}/measurements`. */
 export type RoomRow = {
@@ -32,6 +32,8 @@ export type RoomRow = {
   capacity: number;
   occupancy: number;
   status: 'available' | 'busy';
+  /** ISO string du dernier mouvement détecté (PIR) — null si jamais renseigné. */
+  lastMotionAt: string | null;
 };
 
 export type MeasurementRow = {
@@ -66,7 +68,7 @@ function mapFirestoreDataToMeasurementRow(x: Record<string, unknown>, timestampI
   };
 }
 
-/** Longueur fixe pour que l’ordre lexicographique des IDs = ordre chronologique (comparaison rapide côté client). */
+/** Longueur fixe pour que l'ordre lexicographique des IDs = ordre chronologique (comparaison rapide côté client). */
 const MEASUREMENT_DOC_ID_PAD = 16;
 
 /** ID document Firestore = temps en millisecondes (padding). Même instant : suffixe `_1`, `_2`, … */
@@ -159,7 +161,7 @@ export type AlertRow = {
   status: AlertStatus;
   resolutionRequestedBy?: string;
   resolutionRequestedAt?: string;
-  /** UID Firebase de l’utilisateur ayant demandé la résolution (notifications). */
+  /** UID Firebase de l'utilisateur ayant demandé la résolution (notifications). */
   resolutionRequestedByUid?: string;
   resolvedByName?: string;
   resolvedAt?: string;
@@ -276,7 +278,7 @@ export async function alertApproveResolution(alertId: string, adminName: string)
   }
 }
 
-/** Refus admin : alerte repasse en ouvert + notification à l’utilisateur ayant demandé. */
+/** Refus admin : alerte repasse en ouvert + notification à l'utilisateur ayant demandé. */
 export async function alertRejectResolution(alertId: string): Promise<void> {
   const ref = doc(db, 'alerts', alertId);
   const snap = await getDoc(ref);
@@ -534,12 +536,14 @@ export async function seedAlertsIfEmpty(): Promise<boolean> {
 function mapRoomDoc(d: DocumentSnapshot): RoomRow {
   const x = d.data() ?? {};
   const occ = Number(x.occupancy ?? 0);
+  const lmt = x.lastMotionAt;
   return {
     id: d.id,
     name: String(x.name ?? ''),
     capacity: Number(x.capacity ?? 0),
     occupancy: occ,
     status: occ > 0 ? 'busy' : 'available',
+    lastMotionAt: lmt instanceof Timestamp ? lmt.toDate().toISOString() : null,
   };
 }
 
@@ -556,7 +560,7 @@ export async function listRooms(): Promise<RoomRow[]> {
   return snap.docs.map(mapRoomDoc);
 }
 
-/** Liste salles pour l’UI : capteurs = dernière mesure horodatée (`null` → afficher « -- »). */
+/** Liste salles pour l'UI : capteurs = dernière mesure horodatée (`null` → afficher « -- »). */
 export type RoomListRow = {
   id: string;
   name: string;
@@ -755,7 +759,7 @@ export async function updateRoomLight(roomId: string, lightLux: number): Promise
   });
 }
 
-/** Un point d’historique capteurs : date (`timestamp`) + valeurs (température, humidité, CO₂, bruit, lumière). */
+/** Un point d'historique capteurs : date (`timestamp`) + valeurs (température, humidité, CO₂, bruit, lumière). */
 export async function appendRoomMeasurementSnapshot(
   roomId: string,
   values: {
@@ -859,7 +863,7 @@ export async function appendCurrentSnapshotForRoomAndSignalLinkedDevices(roomId:
   return { devicesSignaled: count };
 }
 
-/** Demande aux Raspberry (documents \`devices\` liés à une salle) d’envoyer une mesure dès que possible. */
+/** Demande aux Raspberry (documents \`devices\` liés à une salle) d'envoyer une mesure dès que possible. */
 export async function signalAllAssignedDevicesSensorCapture(): Promise<number> {
   const snap = await getDocs(collection(db, 'devices'));
   const now = Timestamp.now();
@@ -880,7 +884,7 @@ export async function signalDeviceSensorCaptureNow(deviceId: string): Promise<vo
   });
 }
 
-/** Demande au Raspberry de relancer l’unité systemd room-sensor-agent (l’agent efface le champ puis lance systemctl restart). */
+/** Demande au Raspberry de relancer l'unité systemd room-sensor-agent (l'agent efface le champ puis lance systemctl restart). */
 export async function signalDeviceServiceRestartNow(deviceId: string): Promise<void> {
   await updateDoc(doc(db, 'devices', deviceId), {
     serviceRestartRequestedAt: Timestamp.now(),
@@ -933,7 +937,7 @@ const RETENTION_SETTINGS_PATH = ['settings', 'retention'] as const;
 export const DEFAULT_RETENTION_WEEKS = 2;
 export const MIN_RETENTION_WEEKS = 1;
 export const MAX_RETENTION_WEEKS = 104;
-/** Intervalle minimum entre deux purges automatiques déclenchées depuis l’app (évite les boucles). */
+/** Intervalle minimum entre deux purges automatiques déclenchées depuis l'app (évite les boucles). */
 const AUTO_PURGE_MIN_INTERVAL_MS = 24 * 60 * 60 * 1000;
 
 export type RetentionSettings = {
@@ -1055,7 +1059,7 @@ export async function purgeMeasurementsOlderThanRetentionWeeks(retentionWeeks: n
 }
 
 /**
- * Si la purge auto est activée et qu’au moins 24 h se sont écoulées depuis la dernière purge, supprime les mesures trop anciennes et met à jour `lastPurgeAt`.
+ * Si la purge auto est activée et qu'au moins 24 h se sont écoulées depuis la dernière purge, supprime les mesures trop anciennes et met à jour `lastPurgeAt`.
  */
 export async function maybeRunAutoRetentionPurge(): Promise<{ ran: boolean; deleted: number }> {
   const s = await getRetentionSettings();
@@ -1129,7 +1133,7 @@ function mapSnapToAiSettings(d: Record<string, unknown>): AiSettings {
 }
 
 /**
- * Lit la configuration IA et, si demandé, le journal d’activité (une seule lecture Firestore).
+ * Lit la configuration IA et, si demandé, le journal d'activité (une seule lecture Firestore).
  */
 export async function getAiConfig(options?: { includeLog?: boolean }): Promise<{
   settings: AiSettings;
@@ -1205,7 +1209,7 @@ export async function createRoom(payload: {
   name: string;
   capacity: number;
   occupancy: number;
-  /** ID document Firestore dans `devices` : l’appareil est rattaché à la nouvelle salle. */
+  /** ID document Firestore dans `devices` : l'appareil est rattaché à la nouvelle salle. */
   existingDeviceId?: string;
 }): Promise<string> {
   const roomRef = await addDoc(collection(db, 'rooms'), {
@@ -1237,14 +1241,14 @@ export async function getLinkedDeviceDocIdForRoom(roomId: string): Promise<strin
 }
 
 /**
- * Met à jour nom, capacité et appareil lié. L’occupation est pilotée par le capteur PIR (agent) sauf si `occupancy` est fourni.
+ * Met à jour nom, capacité et appareil lié. L'occupation est pilotée par le capteur PIR (agent) sauf si `occupancy` est fourni.
  */
 export async function updateRoom(
   roomId: string,
   payload: {
     name: string;
     capacity: number;
-    /** Si omis, le champ Firestore `occupancy` n’est pas modifié (ex. capteur PIR). */
+    /** Si omis, le champ Firestore `occupancy` n'est pas modifié (ex. capteur PIR). */
     occupancy?: number;
     /** Document `devices` à rattacher ; vide = aucun appareil sur cette salle. */
     existingDeviceId?: string;
@@ -1345,7 +1349,7 @@ export async function getRoomById(roomId: string): Promise<RoomRow | null> {
   return mapRoomDoc(r);
 }
 
-/** Temps réel : métadonnées d’une salle (name/capacity/occupancy/status). */
+/** Temps réel : métadonnées d'une salle (name/capacity/occupancy/status). */
 export function subscribeRoomById(
   roomId: string,
   onData: (room: RoomRow | null) => void,
@@ -1358,6 +1362,93 @@ export function subscribeRoomById(
       else onData(mapRoomDoc(snap));
     },
     (e) => onError?.(e as Error),
+  );
+}
+
+/**
+ * Surcharge manuelle du statut salle (admin) : occupancy=1 → occupée, 0 → disponible.
+ * Écrase temporairement la valeur du capteur PIR jusqu'à la prochaine mesure de l'agent.
+ */
+export async function updateRoomOccupancy(roomId: string, occupied: boolean): Promise<void> {
+  const payload: Record<string, unknown> = {
+    occupancy: occupied ? 1 : 0,
+    occupancyOverriddenAt: Timestamp.now(),
+  };
+  if (occupied) payload.lastMotionAt = Timestamp.now();
+  await updateDoc(doc(db, 'rooms', roomId), payload);
+}
+
+/** Souscription légère pour le watchdog de vacance PIR — renvoie occupancy + lastMotionAt pour toutes les salles. */
+export function subscribeRoomsOccupancyForWatchdog(
+  onData: (rooms: { id: string; status: 'available' | 'busy'; lastMotionAt: string | null }[]) => void,
+): () => void {
+  return onSnapshot(
+    collection(db, 'rooms'),
+    (snap) => {
+      onData(
+        snap.docs.map((d) => {
+          const x = d.data() ?? {};
+          const occ = Number(x.occupancy ?? 0);
+          const lmt = x.lastMotionAt;
+          return {
+            id: d.id,
+            status: (occ > 0 ? 'busy' : 'available') as 'available' | 'busy',
+            lastMotionAt: lmt instanceof Timestamp ? lmt.toDate().toISOString() : null,
+          };
+        }),
+      );
+    },
+    () => onData([]),
+  );
+}
+
+/**
+ * Crée une alerte Firestore générée automatiquement par l'IA/capteurs.
+ * Retourne l'ID du document créé.
+ */
+export async function createSensorAlert(data: {
+  roomId: string;
+  roomName: string;
+  type: AlertRow['type'];
+  title: string;
+  message: string;
+  category: string;
+}): Promise<string> {
+  const ref = await addDoc(collection(db, 'alerts'), {
+    type: data.type,
+    room: data.roomName,
+    roomId: data.roomId,
+    title: data.title,
+    message: data.message,
+    category: data.category,
+    status: 'open',
+    autoGenerated: true,
+    createdAt: Timestamp.now(),
+    updatedAt: Timestamp.now(),
+  });
+  return ref.id;
+}
+
+/**
+ * Temps réel : un document `devices` (utilisé pour détecter la confirmation de relance systemd).
+ * Retourne le timestamp brut (ms) de `lastUpdate` pour comparer avec l'heure du signal.
+ */
+export function subscribeDeviceLastUpdate(
+  deviceId: string,
+  onData: (lastUpdateMs: number | null) => void,
+): () => void {
+  return onSnapshot(
+    doc(db, 'devices', deviceId),
+    (snap) => {
+      if (!snap.exists()) {
+        onData(null);
+        return;
+      }
+      const x = snap.data();
+      const lu = x.lastUpdate;
+      onData(lu instanceof Timestamp ? lu.toMillis() : null);
+    },
+    () => onData(null),
   );
 }
 
@@ -1375,7 +1466,7 @@ export async function listMeasurements(roomId: string): Promise<MeasurementRow[]
   });
 }
 
-/** Temps réel : dernières mesures d’une salle (max 100, tri desc). */
+/** Temps réel : dernières mesures d'une salle (max 100, tri desc). */
 export function subscribeMeasurements(
   roomId: string,
   onData: (rows: MeasurementRow[]) => void,
@@ -1639,8 +1730,8 @@ export async function listDevices(roomNames: Map<string, string>): Promise<Devic
 }
 
 /**
- * Une salle ne peut avoir qu’un seul appareil ; une IP ne peut correspondre qu’à un seul document `devices`.
- * @param excludeDeviceDocId — document en cours d’édition (mise à jour), à exclure des contrôles.
+ * Une salle ne peut avoir qu'un seul appareil ; une IP ne peut correspondre qu'à un seul document `devices`.
+ * @param excludeDeviceDocId — document en cours d'édition (mise à jour), à exclure des contrôles.
  */
 async function assertDeviceRoomAndIpExclusive(params: {
   roomId: string;
@@ -1660,7 +1751,7 @@ async function assertDeviceRoomAndIpExclusive(params: {
       if (d.id === params.excludeDeviceDocId) continue;
       if (deviceRoomIdFromFirestore(d.data().roomId) === rid) {
         throw new Error(
-          'Cette salle est déjà associée à un autre appareil IoT. Une salle = un seul appareil ; retirez l’association existante ou choisissez une autre salle.',
+          "Cette salle est déjà associée à un autre appareil IoT. Une salle = un seul appareil ; retirez l'association existante ou choisissez une autre salle.",
         );
       }
     }

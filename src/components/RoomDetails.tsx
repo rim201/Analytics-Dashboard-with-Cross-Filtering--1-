@@ -61,7 +61,6 @@ export default function RoomDetails({ roomId, onBack, isAdmin = false }: RoomDet
   const [lightSaving, setLightSaving] = useState(false);
   const [lightError, setLightError] = useState<string | null>(null);
   const [aiAggressiveness, setAiAggressiveness] = useState(7);
-
   const numericRoomId = roomId?.replace(/^room-/, '') ?? '';
 
   useEffect(() => {
@@ -342,23 +341,25 @@ export default function RoomDetails({ roomId, onBack, isAdmin = false }: RoomDet
   return (
     <div className="space-y-6">
       {/* Back Button and Header */}
-      <div className="flex items-center justify-between">
-        <div className="flex items-center space-x-4">
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+        <div className="flex items-center space-x-4 min-w-0">
           <button
             onClick={onBack}
-            className="p-2 hover:bg-gray-100 rounded-xl transition"
+            className="p-2 hover:bg-gray-100 rounded-xl transition shrink-0"
           >
             <ArrowLeft className="w-5 h-5 text-gray-600" />
           </button>
-          <div className="flex-1">
-            <h2 className="text-2xl font-bold text-gray-900">{roomMeta.name}</h2>
-            <div className="flex items-center space-x-4 mt-1">
+          <div className="flex-1 min-w-0">
+            <h2 className="text-xl sm:text-2xl font-bold text-gray-900 truncate">{roomMeta.name}</h2>
+            <div className="flex flex-wrap items-center gap-2 mt-1">
               <div className="flex items-center space-x-2">
-                <div className={`w-2 h-2 rounded-full ${roomMeta.status === 'occupied' ? 'bg-blue-500' : 'bg-emerald-500'}`}></div>
-                <span className="text-sm text-gray-600 capitalize">{roomMeta.status}</span>
+                <div className={`w-2 h-2 rounded-full shrink-0 ${roomMeta.status === 'occupied' ? 'bg-blue-500' : 'bg-emerald-500'}`}></div>
+                <span className="text-sm text-gray-600 capitalize">
+                  {roomMeta.status === 'occupied' ? 'Occupée' : 'Disponible'}
+                </span>
               </div>
               <div className="px-3 py-1 bg-emerald-50 text-emerald-600 rounded-full text-sm font-medium border border-emerald-200">
-                Comfort: {displayComfortScore ?? 0}%
+                Confort : {displayComfortScore ?? 0}%
               </div>
             </div>
           </div>
@@ -380,7 +381,7 @@ export default function RoomDetails({ roomId, onBack, isAdmin = false }: RoomDet
       </div>
 
       {/* Live Sensor Metrics */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4">
+      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3 sm:gap-4">
         {/* Temperature — dernière mesure horodatée */}
         <div className="bg-white rounded-2xl p-6 shadow-lg border border-gray-100">
           <div className="flex items-center justify-between mb-4">
@@ -705,12 +706,9 @@ export default function RoomDetails({ roomId, onBack, isAdmin = false }: RoomDet
             ))}
           </div>
 
-          <div className="mt-4 pt-4 border-t border-white/10">
-            <div className="flex items-center justify-between text-sm">
-              <span className="text-gray-400">Next meeting:</span>
-              <span className="font-medium">Design Review (14:00)</span>
-            </div>
-            <p className="text-xs text-gray-500 mt-1">AI will prepare room 10 minutes before</p>
+          <div className="mt-4 pt-4 border-t border-white/10 flex items-center gap-2 text-xs text-gray-500">
+            <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse shrink-0" />
+            <span>Données en temps réel · mise à jour à chaque mesure capteur</span>
           </div>
         </div>
       </div>

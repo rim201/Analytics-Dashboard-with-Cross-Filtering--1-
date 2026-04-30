@@ -16,13 +16,14 @@ import {
   Rocket,
   RefreshCw,
 } from 'lucide-react';
-import React, { useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   appendCurrentSnapshotForRoomAndSignalLinkedDevices,
   appendCurrentSnapshotsForAllRooms,
   appendAiActivityLog,
   signalDeviceSensorCaptureNow,
   signalDeviceServiceRestartNow,
+  subscribeDeviceLastUpdate,
   createDevice,
   DEFAULT_DEVICE_SSH_USER,
   DEFAULT_RETENTION_WEEKS,
@@ -87,6 +88,9 @@ export default function AdminSettings() {
     sshPort: '22',
   });
   const [piActionBusyId, setPiActionBusyId] = useState<string | null>(null);
+  const [piRestartStatus, setPiRestartStatus] = useState<Record<string, 'waiting' | 'confirmed' | 'timeout'>>({});
+  const piRestartUnsubRef = useRef<Record<string, () => void>>({});
+  const piRestartTimerRef = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
   const [toast, setToast] = useState<ToastState | null>(null);
   const [userErrors, setUserErrors] = useState<{ name?: string; email?: string; password?: string }>({});
   const [deviceFormError, setDeviceFormError] = useState<string | null>(null);
@@ -444,13 +448,47 @@ export default function AdminSettings() {
     );
   };
 
+  const clearPiRestartWatch = useCallback((deviceId: string) => {
+    piRestartUnsubRef.current[deviceId]?.();
+    delete piRestartUnsubRef.current[deviceId];
+    clearTimeout(piRestartTimerRef.current[deviceId]);
+    delete piRestartTimerRef.current[deviceId];
+  }, []);
+
   const handleSignalPiServiceRestart = async (device: DeviceRecord) => {
-    setPiActionBusyId(device.id);
+    const id = device.id;
+    clearPiRestartWatch(id);
+    setPiActionBusyId(id);
+    const signalTimeMs = Date.now();
     try {
-      await signalDeviceServiceRestartNow(device.id);
-      showToast('success', 'Relance du service demandée sur cet appareil (quelques secondes).');
+      await signalDeviceServiceRestartNow(id);
+      setPiRestartStatus((prev) => ({ ...prev, [id]: 'waiting' }));
+      showToast('success', `Signal relance envoyé à ${device.ipAddress ?? id}. Attente de confirmation…`);
+
+      // Écoute les changements de lastUpdate sur le document device
+      const unsub = subscribeDeviceLastUpdate(id, (lastUpdateMs) => {
+        if (lastUpdateMs !== null && lastUpdateMs > signalTimeMs + 1000) {
+          clearPiRestartWatch(id);
+          setPiRestartStatus((prev) => ({ ...prev, [id]: 'confirmed' }));
+          showToast('success', `Relance confirmée par ${device.ipAddress ?? id} (Pi a répondu).`);
+          setTimeout(() => setPiRestartStatus((prev) => { const n = { ...prev }; delete n[id]; return n; }), 8000);
+        }
+      });
+      piRestartUnsubRef.current[id] = unsub;
+
+      // Timeout 45 s — aucune réponse du Pi
+      piRestartTimerRef.current[id] = setTimeout(() => {
+        clearPiRestartWatch(id);
+        setPiRestartStatus((prev) => {
+          if (prev[id] !== 'confirmed') {
+            showToast('error', `Pas de réponse de ${device.ipAddress ?? id} après 45 s. Vérifiez que l'agent Pi est actif.`);
+            const n = { ...prev }; delete n[id]; return n;
+          }
+          return prev;
+        });
+      }, 45000);
     } catch {
-      showToast('error', 'Impossible d’envoyer la relance du service.');
+      showToast('error', "Impossible d’envoyer la relance du service.");
     } finally {
       setPiActionBusyId(null);
     }
@@ -657,7 +695,7 @@ export default function AdminSettings() {
   return (
     <div className="space-y-6">
       {toast && (
-        <div className={`fixed top-4 right-4 z-[60] px-4 py-3 rounded-xl shadow-lg border text-sm ${
+        <div className={`fixed top-4 left-4 right-4 sm:left-auto sm:right-4 sm:max-w-sm z-[60] px-4 py-3 rounded-xl shadow-lg border text-sm ${
           toast.type === 'success'
             ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
             : 'bg-red-50 text-red-700 border-red-200'
@@ -673,63 +711,70 @@ export default function AdminSettings() {
       </div>
 
       {/* Stats */}
-      <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-        <div className="bg-white rounded-2xl p-6 shadow-lg border border-gray-100">
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-3 sm:gap-4">
+        <div className="bg-white rounded-2xl p-4 sm:p-6 shadow-lg border border-gray-100">
           <div className="flex items-center justify-between mb-2">
-            <span className="text-sm text-gray-500">Active Users</span>
-            <Users className="w-5 h-5 text-emerald-600" />
+            <span className="text-xs sm:text-sm text-gray-500">Utilisateurs actifs</span>
+            <Users className="w-5 h-5 text-emerald-600 shrink-0" />
           </div>
-          <div className="text-2xl font-bold text-gray-900">{activeUsers}/{users.length}</div>
+          <div className="text-xl sm:text-2xl font-bold text-gray-900">{activeUsers}/{users.length}</div>
         </div>
-        <div className="bg-white rounded-2xl p-6 shadow-lg border border-gray-100">
+        <div className="bg-white rounded-2xl p-4 sm:p-6 shadow-lg border border-gray-100">
           <div className="flex items-center justify-between mb-2">
-            <span className="text-sm text-gray-500">IoT Devices</span>
-            <Wifi className="w-5 h-5 text-blue-600" />
+            <span className="text-xs sm:text-sm text-gray-500">Appareils IoT</span>
+            <Wifi className="w-5 h-5 text-blue-600 shrink-0" />
           </div>
-          <div className="text-2xl font-bold text-gray-900">{onlineDevices}/{devices.length}</div>
+          <div className="text-xl sm:text-2xl font-bold text-gray-900">
+            <span className={onlineDevices > 0 ? 'text-emerald-600' : 'text-gray-400'}>{onlineDevices}</span>
+            <span className="text-gray-400">/{devices.length}</span>
+          </div>
         </div>
-        <div className="bg-white rounded-2xl p-6 shadow-lg border border-gray-100">
+        <div className="bg-white rounded-2xl p-4 sm:p-6 shadow-lg border border-gray-100">
           <div className="flex items-center justify-between mb-2">
-            <span className="text-sm text-gray-500">System Health</span>
-            <Cpu className="w-5 h-5 text-purple-600" />
+            <span className="text-xs sm:text-sm text-gray-500">Base de données</span>
+            <Database className="w-5 h-5 text-purple-600 shrink-0" />
           </div>
-          <div className="text-2xl font-bold text-gray-900">98.5%</div>
+          <div className="text-xl sm:text-2xl font-bold text-emerald-600">OK</div>
         </div>
-        <div className="bg-white rounded-2xl p-6 shadow-lg border border-gray-100">
+        <div className="bg-white rounded-2xl p-4 sm:p-6 shadow-lg border border-gray-100">
           <div className="flex items-center justify-between mb-2">
-            <span className="text-sm text-gray-500">AI Model</span>
-            <Brain className="w-5 h-5 text-amber-600" />
+            <span className="text-xs sm:text-sm text-gray-500">Config IA</span>
+            <Brain className="w-5 h-5 text-amber-600 shrink-0" />
           </div>
-          <div className="text-2xl font-bold text-gray-900">v2.4.1</div>
+          <div className="text-xl sm:text-2xl font-bold text-gray-900">
+            {aiActivityLog.length > 0 ? `${aiActivityLog.length} log` : '—'}
+          </div>
         </div>
       </div>
 
-      {/* Tabs */}
-      <div className="bg-white rounded-2xl p-2 shadow-lg border border-gray-100 inline-flex space-x-1">
-        {[
-          { id: 'users' as const, label: 'Users', icon: Users },
-          { id: 'devices' as const, label: 'IoT Devices', icon: Wifi },
-          { id: 'roomData' as const, label: 'Mesures salles', icon: CalendarClock },
-          { id: 'system' as const, label: 'System', icon: Cpu },
-          { id: 'ai' as const, label: 'AI Config', icon: Brain },
-        ].map((tab) => {
-          const Icon = tab.icon;
-          return (
-            <button
-              key={tab.id}
-              type="button"
-              onClick={() => selectTab(tab.id)}
-              className={`flex items-center space-x-2 px-4 py-2 rounded-xl font-medium transition ${
-                activeTab === tab.id
-                  ? 'bg-emerald-500 text-white shadow-md'
-                  : 'text-gray-600 hover:bg-gray-50'
-              }`}
-            >
-              <Icon className="w-4 h-4" />
-              <span>{tab.label}</span>
-            </button>
-          );
-        })}
+      {/* Tabs — scrollables sur mobile */}
+      <div className="bg-white rounded-2xl p-2 shadow-lg border border-gray-100 overflow-x-auto">
+        <div className="flex space-x-1 min-w-max">
+          {[
+            { id: 'users' as const, label: 'Utilisateurs', icon: Users },
+            { id: 'devices' as const, label: 'IoT Devices', icon: Wifi },
+            { id: 'roomData' as const, label: 'Mesures salles', icon: CalendarClock },
+            { id: 'system' as const, label: 'Système', icon: Cpu },
+            { id: 'ai' as const, label: 'Config IA', icon: Brain },
+          ].map((tab) => {
+            const Icon = tab.icon;
+            return (
+              <button
+                key={tab.id}
+                type="button"
+                onClick={() => selectTab(tab.id)}
+                className={`flex items-center space-x-2 px-3 sm:px-4 py-2 rounded-xl font-medium transition whitespace-nowrap ${
+                  activeTab === tab.id
+                    ? 'bg-emerald-500 text-white shadow-md'
+                    : 'text-gray-600 hover:bg-gray-50'
+                }`}
+              >
+                <Icon className="w-4 h-4 shrink-0" />
+                <span className="text-sm">{tab.label}</span>
+              </button>
+            );
+          })}
+        </div>
       </div>
 
       {/* Tab Content */}
@@ -918,7 +963,7 @@ export default function AdminSettings() {
               <li className="flex gap-2 rounded-md py-1 pl-0 pr-1 hover:bg-amber-100/40">
                 <span className="w-6 shrink-0 font-semibold text-amber-900">2.</span>
                 <span>
-                  Renseignez l’<strong>IP</strong> du Raspberry dans le tableau (colonne <strong>IP / SSH</strong>) — repère ; l’IP réelle du déploiement
+                  Renseignez l'<strong>IP</strong> du Raspberry dans le tableau (colonne <strong>IP / SSH</strong>) — repère ; l’IP réelle du déploiement
                   est celle saisie à l’étape 6.
                 </span>
               </li>
@@ -1112,46 +1157,46 @@ export default function AdminSettings() {
               </form>
             </div>
           )}
-          <div className="overflow-x-auto">
-            <table className="w-full">
+          <div className="overflow-x-auto overscroll-x-contain [mask-image:linear-gradient(to_right,transparent_0,black_4px,black_calc(100%-4px),transparent_100%)] sm:[mask-image:none]">
+            <table className="w-full min-w-[600px]">
               <thead className="bg-gray-50">
                 <tr>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">IP / SSH</th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Room</th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Status</th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Dernière màj</th>
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Actions</th>
+                  <th className="px-4 sm:px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">IP / SSH</th>
+                  <th className="px-4 sm:px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Salle</th>
+                  <th className="px-4 sm:px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Statut</th>
+                  <th className="px-4 sm:px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider hidden sm:table-cell">Dernière màj</th>
+                  <th className="px-4 sm:px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Actions</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-100">
                 {devices.map((device) => (
                   <tr key={device.id} className="hover:bg-gray-50">
-                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-800 font-mono text-xs">
+                    <td className="px-4 sm:px-6 py-4 whitespace-nowrap text-sm text-gray-800 font-mono text-xs">
                       <div className="flex items-center gap-2">
-                        <Wifi className="h-5 w-5 shrink-0 text-gray-400" aria-hidden />
+                        <Wifi className={`h-4 w-4 shrink-0 ${device.status === 'online' ? 'text-emerald-500' : device.status === 'error' ? 'text-red-400' : 'text-gray-300'}`} aria-hidden />
                         {device.ipAddress ? (
                           <span>
                             {device.ipAddress}
-                            <span className="text-gray-500">
-                              :{device.sshPort ?? 22} ({device.sshUser ?? DEFAULT_DEVICE_SSH_USER})
+                            <span className="text-gray-400">
+                              :{device.sshPort ?? 22}
                             </span>
                           </span>
                         ) : (
-                          '—'
+                          <span className="text-gray-400">—</span>
                         )}
                       </div>
                     </td>
-                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-600">{device.room}</td>
-                    <td className="px-6 py-4 whitespace-nowrap">
-                      <span className={`px-3 py-1 rounded-lg text-xs font-medium border capitalize ${getStatusColor(device.status)}`}>
-                        {device.status}
+                    <td className="px-4 sm:px-6 py-4 whitespace-nowrap text-sm text-gray-600 max-w-[120px] truncate">{device.room}</td>
+                    <td className="px-4 sm:px-6 py-4 whitespace-nowrap">
+                      <span className={`px-2 py-1 rounded-lg text-xs font-medium border capitalize ${getStatusColor(device.status)}`}>
+                        {device.status === 'online' ? 'en ligne' : device.status === 'offline' ? 'hors ligne' : 'erreur'}
                       </span>
                     </td>
-                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                      <div>{device.lastUpdate}</div>
+                    <td className="px-4 sm:px-6 py-4 whitespace-nowrap text-sm text-gray-500 hidden sm:table-cell">
+                      <div className="text-xs">{device.lastUpdate || '—'}</div>
                       <div className="text-xs text-gray-400">Capteurs: {device.lastSensorPush || '—'}</div>
                     </td>
-                    <td className="px-6 py-4 whitespace-nowrap text-sm">
+                    <td className="px-4 sm:px-6 py-4 whitespace-nowrap text-sm">
                       <div className="flex flex-wrap items-center gap-1">
                         <button
                           type="button"
@@ -1170,12 +1215,24 @@ export default function AdminSettings() {
                         </button>
                         <button
                           type="button"
-                          title="Relancer l’agent systemd sur la Pi (après mise à jour des fichiers ou en cas de blocage)"
-                          disabled={piActionBusyId === device.id}
+                          title={
+                            piRestartStatus[device.id] === 'confirmed'
+                              ? 'Relance confirmée par le Pi'
+                              : piRestartStatus[device.id] === 'waiting'
+                              ? 'En attente de confirmation du Pi…'
+                              : 'Relancer l’agent systemd sur la Pi (après mise à jour des fichiers ou en cas de blocage)'
+                          }
+                          disabled={piActionBusyId === device.id || piRestartStatus[device.id] === 'waiting'}
                           onClick={() => void handleSignalPiServiceRestart(device)}
-                          className="p-2 text-slate-600 hover:bg-slate-100 rounded-lg transition disabled:opacity-50"
+                          className={`p-2 rounded-lg transition disabled:opacity-50 ${
+                            piRestartStatus[device.id] === 'confirmed'
+                              ? 'text-emerald-600 bg-emerald-50'
+                              : piRestartStatus[device.id] === 'waiting'
+                              ? 'text-amber-600 bg-amber-50'
+                              : 'text-slate-600 hover:bg-slate-100'
+                          }`}
                         >
-                          <RefreshCw className="w-4 h-4" />
+                          <RefreshCw className={`w-4 h-4 ${piRestartStatus[device.id] === 'waiting' ? 'animate-spin' : ''}`} />
                         </button>
                         <button
                           type="button"

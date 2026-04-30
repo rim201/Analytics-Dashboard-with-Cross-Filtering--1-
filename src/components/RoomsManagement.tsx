@@ -717,9 +717,9 @@ export default function RoomsManagement({ onRoomSelect, isAdmin = false }: Rooms
                   e.stopPropagation();
                   onRoomSelect(`room-${room.id}`);
                 }}
-                className="flex-1 min-w-[8rem] px-4 py-2 bg-emerald-500 text-white rounded-xl font-medium hover:bg-emerald-600 transition"
+                className="flex-1 min-w-[7rem] px-4 py-2 bg-emerald-500 text-white rounded-xl font-medium hover:bg-emerald-600 transition"
               >
-                View Details
+                Détails
               </button>
               {isAdmin && (
                 <button
@@ -738,7 +738,7 @@ export default function RoomsManagement({ onRoomSelect, isAdmin = false }: Rooms
                     });
                     setEditFormErrors({});
                   }}
-                  className="px-4 py-2 bg-blue-50 text-blue-700 border border-blue-200 rounded-xl font-medium hover:bg-blue-100 transition flex items-center justify-center gap-2"
+                  className="px-3 py-2 bg-blue-50 text-blue-700 border border-blue-200 rounded-xl font-medium hover:bg-blue-100 transition flex items-center justify-center"
                   aria-label={`Modifier la salle ${room.name}`}
                 >
                   <Pencil className="w-4 h-4" />
@@ -751,8 +751,8 @@ export default function RoomsManagement({ onRoomSelect, isAdmin = false }: Rooms
                     e.stopPropagation();
                     void handleDeleteRoom(room);
                   }}
-                  className="px-4 py-2 bg-red-50 text-red-600 border border-red-200 rounded-xl font-medium hover:bg-red-100 transition flex items-center justify-center gap-2"
-                  aria-label={`Delete room ${room.name}`}
+                  className="px-3 py-2 bg-red-50 text-red-600 border border-red-200 rounded-xl font-medium hover:bg-red-100 transition flex items-center justify-center"
+                  aria-label={`Supprimer la salle ${room.name}`}
                 >
                   <Trash2 className="w-4 h-4" />
                 </button>

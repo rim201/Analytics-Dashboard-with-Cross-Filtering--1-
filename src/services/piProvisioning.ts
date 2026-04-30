@@ -41,7 +41,7 @@ export function buildAgentConfigJson(
         pirActiveLow: false,
         pirSampleMs: 700,
         pirMotionMinFrac: 0.72,
-        pirVacancyMinutes: 1,
+        pirVacancyMinutes: 2,
         /** Anti-sensibilité : min. secondes entre deux prises en compte du « dernier mouvement » (rafraîchissement vacance) si la ligne reste à 1. */
         pirMotionCooldownSeconds: 5,
         /** Intervalle entre deux lectures is_active (ex. 0.5 s, style tuto gpiozero). */
@@ -1139,6 +1139,7 @@ def sync_room_occupancy_from_pir(db, room_id: str, cfg: dict, motion):
             {
                 "occupancy": int(new_occ),
                 "lastUpdate": firestore.SERVER_TIMESTAMP,
+                **({"lastMotionAt": firestore.SERVER_TIMESTAMP} if new_occ == 1 else {}),
             },
             merge=True,
         )

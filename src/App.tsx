@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { useMotionWatchdog } from './hooks/useMotionWatchdog';
 import { onAuthStateChanged } from 'firebase/auth';
 import type { User } from 'firebase/auth';
 import LoginPage from './components/LoginPage';
@@ -38,8 +39,33 @@ function App() {
   const [authUser, setAuthUser] = useState<User | null>(null);
   const [userProfile, setUserProfile] = useState<UserProfile | null>(null);
   const [selectedRoomId, setSelectedRoomId] = useState<string | null>(null);
+  const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [isDark, setIsDark] = useState<boolean>(() => {
+    try {
+      const stored = localStorage.getItem('theme');
+      const dark =
+        stored === 'dark' ? true
+        : stored === 'light' ? false
+        : window.matchMedia('(prefers-color-scheme: dark)').matches;
+      document.documentElement.classList.toggle('dark', dark);
+      return dark;
+    } catch {
+      return false;
+    }
+  });
+
+  const onToggleTheme = () => {
+    setIsDark((d) => {
+      const next = !d;
+      document.documentElement.classList.toggle('dark', next);
+      try { localStorage.setItem('theme', next ? 'dark' : 'light'); } catch {}
+      return next;
+    });
+  };
 
   const isAdmin = userProfile?.role === 'admin';
+
+  useMotionWatchdog(!!authUser);
   const canAccessAlerts = canAccessAlertsAndNotifications(userProfile?.role);
   const canModerateAlertActions = canModerateAlerts(userProfile?.role);
 
@@ -117,6 +143,7 @@ function App() {
     if (page === 'settings' && !isAdmin) return;
     if (page === 'alerts' && !canAccessAlerts) return;
     setCurrentPage(page);
+    setSidebarOpen(false);
   };
 
   const handleRoomSelect = (roomId: string) => {
@@ -126,8 +153,11 @@ function App() {
 
   if (!authReady) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-gray-50 text-gray-600">
-      Chargement…
+      <div
+        className="min-h-screen flex items-center justify-center"
+        style={{ background: 'var(--background)', color: 'var(--gray-600)' }}
+      >
+        Chargement…
       </div>
     );
   }
@@ -163,14 +193,16 @@ function App() {
   }
 
   return (
-    <div className="flex h-screen bg-gray-50">
+    <div className="flex h-screen" style={{ background: 'var(--background)' }}>
       <Sidebar
         currentPage={currentPage}
         onNavigate={handleNavigate}
         isAdmin={isAdmin}
         canAccessAlerts={canAccessAlerts}
+        open={sidebarOpen}
+        onClose={() => setSidebarOpen(false)}
       />
-      <div className="flex-1 flex flex-col overflow-hidden">
+      <div className="flex-1 flex flex-col overflow-hidden min-w-0">
         <TopNav
           displayName={userProfile.name}
           email={authUser.email ?? ''}
@@ -179,25 +211,30 @@ function App() {
           canAccessAlerts={canAccessAlerts}
           canModerateAlerts={canModerateAlertActions}
           onOpenAlertsPage={() => setCurrentPage('alerts')}
+          onMenuToggle={() => setSidebarOpen(true)}
+          isDark={isDark}
+          onToggleTheme={onToggleTheme}
         />
-        <main className="flex-1 overflow-y-auto p-6">
-          {currentPage === 'dashboard' && <MainDashboard onNavigate={handleNavigate} />}
-          {currentPage === 'rooms' && <RoomsManagement onRoomSelect={handleRoomSelect} isAdmin={isAdmin} />}
-          {currentPage === 'room-details' && (
-            <RoomDetails
-              roomId={selectedRoomId}
-              onBack={() => setCurrentPage('rooms')}
-              isAdmin={isAdmin}
-            />
-          )}
-          {currentPage === 'alerts' && canAccessAlerts && (
-            <AlertsNotifications
-              canModerateAlerts={canModerateAlertActions}
-              currentUserName={userProfile.name}
-              currentUserId={authUser.uid}
-            />
-          )}
-          {currentPage === 'settings' && isAdmin && <AdminSettings />}
+        <main className="flex-1 overflow-y-auto" style={{ padding: '1.5rem' }}>
+          <div className="page-max-width">
+            {currentPage === 'dashboard' && <MainDashboard onNavigate={handleNavigate} />}
+            {currentPage === 'rooms' && <RoomsManagement onRoomSelect={handleRoomSelect} isAdmin={isAdmin} />}
+            {currentPage === 'room-details' && (
+              <RoomDetails
+                roomId={selectedRoomId}
+                onBack={() => setCurrentPage('rooms')}
+                isAdmin={isAdmin}
+              />
+            )}
+            {currentPage === 'alerts' && canAccessAlerts && (
+              <AlertsNotifications
+                canModerateAlerts={canModerateAlertActions}
+                currentUserName={userProfile.name}
+                currentUserId={authUser.uid}
+              />
+            )}
+            {currentPage === 'settings' && isAdmin && <AdminSettings />}
+          </div>
         </main>
       </div>
     </div>

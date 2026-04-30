@@ -1,8 +1,8 @@
-import { Thermometer, Wind, Volume2, Sun, Star, Brain, Droplets } from 'lucide-react';
+import { Thermometer, Wind, Volume2, Sun, Star, Brain, Droplets, AlertTriangle, X } from 'lucide-react';
 import { LineChart, Line, AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { PageType } from '../App';
-import { buildAiRecommendationsFromRooms, type AiDashboardRec } from '../services/aiRecommendations';
+import { buildAiRecommendationsFromRooms, buildSensorAlertCandidates, type AiDashboardRec } from '../services/aiRecommendations';
 import {
   comfortChipToneClass,
   statusHigherIsWorse,
@@ -12,19 +12,105 @@ import {
   statusTemperature,
 } from '../services/sensorComfortRules';
 import {
+  createSensorAlert,
   fetchDashboardSummary,
   getAiConfig,
   listRoomsWithLatestMeasurements,
   subscribeRoomsWithLatestMeasurements,
+  type RoomListRow,
 } from '../services/firestoreApi';
+
+const AUTO_ALERT_COOLDOWN_MS = 2 * 60 * 60 * 1000;
+const autoAlertThrottle = new Map<string, number>();
+
+function maybeCreateSensorAlerts(rooms: RoomListRow[]) {
+  const now = Date.now();
+  const candidates = buildSensorAlertCandidates(rooms);
+  for (const c of candidates) {
+    const last = autoAlertThrottle.get(c.key) ?? 0;
+    if (now - last < AUTO_ALERT_COOLDOWN_MS) continue;
+    autoAlertThrottle.set(c.key, now);
+    void createSensorAlert({
+      roomId: c.roomId,
+      roomName: c.roomName,
+      type: c.type,
+      title: c.title,
+      message: c.message,
+      category: c.category,
+    }).catch(() => {});
+  }
+}
 
 interface MainDashboardProps {
   onNavigate: (page: PageType) => void;
 }
 
 function EmptyChartArea() {
-  return <div className="h-[240px] min-h-[240px]" aria-hidden />;
+  return (
+    <div
+      className="h-[240px] min-h-[240px] rounded-xl flex items-center justify-center"
+      style={{ background: 'var(--gray-50)' }}
+      aria-hidden
+    >
+      <p className="text-sm" style={{ color: 'var(--gray-400)' }}>
+        No data yet
+      </p>
+    </div>
+  );
 }
+
+const SENSOR_CONFIG = [
+  {
+    key: 'temperature' as const,
+    label: 'Temperature',
+    unit: '°C',
+    icon: Thermometer,
+    iconBg: '#fff7ed',
+    iconColor: '#f97316',
+    iconBorder: '#fed7aa',
+    format: (v: number) => `${v}°C`,
+  },
+  {
+    key: 'humidity' as const,
+    label: 'Humidity',
+    unit: '%',
+    icon: Droplets,
+    iconBg: '#ecfeff',
+    iconColor: '#06b6d4',
+    iconBorder: '#a5f3fc',
+    format: (v: number) => `${Math.round(v)}%`,
+  },
+  {
+    key: 'co2' as const,
+    label: 'CO₂',
+    unit: 'ppm',
+    icon: Wind,
+    iconBg: '#eff6ff',
+    iconColor: '#3b82f6',
+    iconBorder: '#bfdbfe',
+    format: (v: number) => `${Math.round(v)} ppm`,
+  },
+  {
+    key: 'noise' as const,
+    label: 'Noise',
+    unit: 'dB',
+    icon: Volume2,
+    iconBg: '#faf5ff',
+    iconColor: '#a855f7',
+    iconBorder: '#e9d5ff',
+    format: (v: number) => `${Math.round(v)} dB`,
+  },
+  {
+    key: 'light' as const,
+    label: 'Light',
+    unit: 'lux',
+    icon: Sun,
+    iconBg: '#fffbeb',
+    iconColor: '#f59e0b',
+    iconBorder: '#fde68a',
+    format: (v: number) => `${Math.round(v)} lux`,
+  },
+] as const;
 
 export default function MainDashboard({ onNavigate }: MainDashboardProps) {
   const [summary, setSummary] = useState({
@@ -42,6 +128,14 @@ export default function MainDashboard({ onNavigate }: MainDashboardProps) {
   });
   const [aiRecs, setAiRecs] = useState<AiDashboardRec[]>([]);
   const [aiAutoApply, setAiAutoApply] = useState(false);
+  const [alertToast, setAlertToast] = useState<{ title: string; room: string } | null>(null);
+  const prevRoomsRef = useRef<RoomListRow[]>([]);
+
+  useEffect(() => {
+    if (!alertToast) return;
+    const t = setTimeout(() => setAlertToast(null), 6000);
+    return () => clearTimeout(t);
+  }, [alertToast]);
 
   useEffect(() => {
     let cancelled = false;
@@ -78,6 +172,8 @@ export default function MainDashboard({ onNavigate }: MainDashboardProps) {
             6,
           ),
         );
+        maybeCreateSensorAlerts(rooms);
+        prevRoomsRef.current = rooms;
       } catch {
         /* ignore */
       }
@@ -85,15 +181,11 @@ export default function MainDashboard({ onNavigate }: MainDashboardProps) {
 
     const scheduleRefresh = () => {
       if (refreshTimer) clearTimeout(refreshTimer);
-      refreshTimer = setTimeout(() => {
-        void refresh();
-      }, 200);
+      refreshTimer = setTimeout(() => { void refresh(); }, 200);
     };
 
     void refresh();
-    const unsub = subscribeRoomsWithLatestMeasurements(() => {
-      scheduleRefresh();
-    });
+    const unsub = subscribeRoomsWithLatestMeasurements(() => { scheduleRefresh(); });
 
     return () => {
       cancelled = true;
@@ -102,172 +194,193 @@ export default function MainDashboard({ onNavigate }: MainDashboardProps) {
     };
   }, []);
 
-  const dashStatus = useMemo(() => {
-    return {
-      temperature: summary.temperature != null ? statusTemperature(summary.temperature) : null,
-      humidity: summary.humidity != null ? statusHumidityPct(summary.humidity) : null,
-      co2: summary.co2 != null ? statusHigherIsWorse(summary.co2, 500, 800) : null,
-      noise: summary.noise != null ? statusNoiseDb(summary.noise) : null,
-      light: summary.light != null ? statusLux(summary.light) : null,
-    };
-  }, [summary.temperature, summary.humidity, summary.co2, summary.noise, summary.light]);
+  const dashStatus = useMemo(() => ({
+    temperature: summary.temperature != null ? statusTemperature(summary.temperature) : null,
+    humidity: summary.humidity != null ? statusHumidityPct(summary.humidity) : null,
+    co2: summary.co2 != null ? statusHigherIsWorse(summary.co2, 500, 800) : null,
+    noise: summary.noise != null ? statusNoiseDb(summary.noise) : null,
+    light: summary.light != null ? statusLux(summary.light) : null,
+  }), [summary.temperature, summary.humidity, summary.co2, summary.noise, summary.light]);
+
+  const sensorValues: Record<string, number | null> = {
+    temperature: summary.temperature,
+    humidity: summary.humidity,
+    co2: summary.co2,
+    noise: summary.noise,
+    light: summary.light,
+  };
+
+  const sensorStatuses: Record<string, ReturnType<typeof statusTemperature> | null> = {
+    temperature: dashStatus.temperature,
+    humidity: dashStatus.humidity,
+    co2: dashStatus.co2,
+    noise: dashStatus.noise,
+    light: dashStatus.light,
+  };
 
   return (
-    <div className="space-y-6">
-      {/* Header Stats */}
-      <div className="grid grid-cols-1 gap-4">
-        {/* Comfort Score */}
-        <div className="bg-gradient-to-br from-emerald-500 to-emerald-600 rounded-2xl p-6 text-white shadow-xl">
-          <div className="flex items-center justify-between mb-4">
-            <Star className="w-6 h-6" />
-            <span className="text-sm font-medium opacity-90">Overall</span>
+    <div className="flex flex-col page-content" style={{ gap: '2rem', paddingBlock: '0.5rem 2rem' }}>
+      {/* Alert toast */}
+      {alertToast && (
+        <div
+          className="fixed top-4 left-4 right-4 sm:left-auto sm:right-4 sm:max-w-sm z-50"
+          role="alert"
+        >
+          <div
+            className="flex items-start gap-3 rounded-2xl px-4 py-3 alert-toast-warning"
+            style={{ boxShadow: 'var(--shadow-xl)' }}
+          >
+            <AlertTriangle className="w-5 h-5 shrink-0 mt-0.5" style={{ color: '#d97706' }} />
+            <div className="flex-1 min-w-0">
+              <p className="text-sm font-semibold" style={{ color: '#92400e' }}>{alertToast.title}</p>
+              <p className="text-xs mt-0.5" style={{ color: '#b45309' }}>{alertToast.room}</p>
+            </div>
+            <button
+              type="button"
+              onClick={() => setAlertToast(null)}
+              className="shrink-0 transition"
+              style={{ color: '#d97706' }}
+            >
+              <X className="w-4 h-4" />
+            </button>
           </div>
-          <div className="space-y-2">
-            <div className="flex items-center space-x-1">
-              {[1, 2, 3, 4, 5].map((star) => (
-                <Star key={star} className={`w-5 h-5 ${star <= 4 ? 'fill-current' : 'opacity-50'}`} />
+        </div>
+      )}
+
+      {/* ── Page header ── */}
+      <div
+        className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4"
+        style={{ borderBottom: '1px solid var(--gray-200)', paddingBottom: '1.5rem' }}
+      >
+        <div>
+          <h2
+            className="text-2xl font-bold leading-tight"
+            style={{ color: 'var(--gray-900)', letterSpacing: '-0.025em' }}
+          >
+            Dashboard
+          </h2>
+          <p className="text-sm mt-0.5" style={{ color: 'var(--gray-500)' }}>
+            Overview · all rooms · last 24 h
+          </p>
+        </div>
+
+        {/* Room overview chips */}
+        <div className="flex flex-wrap items-center gap-3">
+          <div className="stat-chip stat-chip-available">
+            <span className="w-2 h-2 rounded-full shrink-0 dot-available" />
+            {summary.roomOverview.available} available
+          </div>
+          <div className="stat-chip stat-chip-occupied">
+            <span className="w-2 h-2 rounded-full shrink-0 dot-busy" />
+            {summary.roomOverview.occupied} occupied
+          </div>
+          <div className="stat-chip stat-chip-comfort">
+            <div className="flex items-center gap-0.5">
+              {[1, 2, 3, 4, 5].map((s) => (
+                <Star
+                  key={s}
+                  className="w-3 h-3"
+                  style={{
+                    fill: s <= Math.round(summary.comfortScore / 20) ? '#10b981' : 'transparent',
+                    color: s <= Math.round(summary.comfortScore / 20) ? '#10b981' : 'var(--gray-300)',
+                  }}
+                />
               ))}
             </div>
-            <div className="text-3xl font-bold">{summary.comfortScore}%</div>
-            <div className="text-sm opacity-90">Comfort Score</div>
-            <div className="text-xs opacity-75 mt-1">24h · all rooms</div>
+            {summary.comfortScore}%
           </div>
-        </div>
-
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4">
-        {/* Temperature */}
-        <div className="bg-white rounded-2xl p-6 shadow-lg border border-gray-100">
-          <div className="flex items-center justify-between mb-4">
-            <div className="w-12 h-12 bg-gradient-to-br from-orange-100 to-orange-200 rounded-xl flex items-center justify-center">
-              <Thermometer className="w-6 h-6 text-orange-600" />
-            </div>
-            {dashStatus.temperature != null ? (
-              <span
-                className={`px-2 py-1 text-xs font-medium rounded-lg ${comfortChipToneClass(dashStatus.temperature)}`}
-              >
-                {dashStatus.temperature.label}
-              </span>
-            ) : (
-              <span className="px-2 py-1 text-xs font-medium rounded-lg bg-gray-100 text-gray-500">--</span>
-            )}
-          </div>
-          <div className="text-3xl font-bold text-gray-900">
-            {summary.temperature != null ? `${summary.temperature}°C` : '--'}
-          </div>
-          <div className="text-sm text-gray-500">Temperature</div>
-          <div className="text-xs text-gray-400 mt-1">24h average · all rooms</div>
-        </div>
-
-        {/* Humidity */}
-        <div className="bg-white rounded-2xl p-6 shadow-lg border border-gray-100">
-          <div className="flex items-center justify-between mb-4">
-            <div className="w-12 h-12 bg-gradient-to-br from-cyan-100 to-cyan-200 rounded-xl flex items-center justify-center">
-              <Droplets className="w-6 h-6 text-cyan-600" />
-            </div>
-            {dashStatus.humidity != null ? (
-              <span
-                className={`px-2 py-1 text-xs font-medium rounded-lg ${comfortChipToneClass(dashStatus.humidity)}`}
-              >
-                {dashStatus.humidity.label}
-              </span>
-            ) : (
-              <span className="px-2 py-1 text-xs font-medium rounded-lg bg-gray-100 text-gray-500">--</span>
-            )}
-          </div>
-          <div className="text-3xl font-bold text-gray-900">
-            {summary.humidity != null ? `${Math.round(summary.humidity)}%` : '--'}
-          </div>
-          <div className="text-sm text-gray-500">Humidity</div>
-          <div className="text-xs text-gray-400 mt-1">24h average · all rooms</div>
-        </div>
-
-        {/* CO2 Level */}
-        <div className="bg-white rounded-2xl p-6 shadow-lg border border-gray-100">
-          <div className="flex items-center justify-between mb-4">
-            <div className="w-12 h-12 bg-gradient-to-br from-blue-100 to-blue-200 rounded-xl flex items-center justify-center">
-              <Wind className="w-6 h-6 text-blue-600" />
-            </div>
-            {dashStatus.co2 != null ? (
-              <span className={`px-2 py-1 text-xs font-medium rounded-lg ${comfortChipToneClass(dashStatus.co2)}`}>
-                {dashStatus.co2.label}
-              </span>
-            ) : (
-              <span className="px-2 py-1 text-xs font-medium rounded-lg bg-gray-100 text-gray-500">--</span>
-            )}
-          </div>
-          <div className="text-3xl font-bold text-gray-900">
-            {summary.co2 != null ? `${Math.round(summary.co2)} ppm` : '--'}
-          </div>
-          <div className="text-sm text-gray-500">CO₂ Level</div>
-          <div className="text-xs text-gray-400 mt-1">24h average · all rooms</div>
-        </div>
-
-        {/* Noise Level */}
-        <div className="bg-white rounded-2xl p-6 shadow-lg border border-gray-100">
-          <div className="flex items-center justify-between mb-4">
-            <div className="w-12 h-12 bg-gradient-to-br from-purple-100 to-purple-200 rounded-xl flex items-center justify-center">
-              <Volume2 className="w-6 h-6 text-purple-600" />
-            </div>
-            {dashStatus.noise != null ? (
-              <span className={`px-2 py-1 text-xs font-medium rounded-lg ${comfortChipToneClass(dashStatus.noise)}`}>
-                {dashStatus.noise.label}
-              </span>
-            ) : (
-              <span className="px-2 py-1 text-xs font-medium rounded-lg bg-gray-100 text-gray-500">--</span>
-            )}
-          </div>
-          <div className="text-3xl font-bold text-gray-900">
-            {summary.noise != null ? `${Math.round(summary.noise)} dB` : '--'}
-          </div>
-          <div className="text-sm text-gray-500">Noise Level</div>
-          <div className="text-xs text-gray-400 mt-1">24h average · all rooms</div>
-        </div>
-
-        {/* Light Intensity */}
-        <div className="bg-white rounded-2xl p-6 shadow-lg border border-gray-100">
-          <div className="flex items-center justify-between mb-4">
-            <div className="w-12 h-12 bg-gradient-to-br from-amber-100 to-amber-200 rounded-xl flex items-center justify-center">
-              <Sun className="w-6 h-6 text-amber-600" />
-            </div>
-            {dashStatus.light != null ? (
-              <span className={`px-2 py-1 text-xs font-medium rounded-lg ${comfortChipToneClass(dashStatus.light)}`}>
-                {dashStatus.light.label}
-              </span>
-            ) : (
-              <span className="px-2 py-1 text-xs font-medium rounded-lg bg-gray-100 text-gray-500">--</span>
-            )}
-          </div>
-          <div className="text-3xl font-bold text-gray-900">
-            {summary.light != null ? `${Math.round(summary.light)} lux` : '--'}
-          </div>
-          <div className="text-sm text-gray-500">Light Intensity</div>
-          <div className="text-xs text-gray-400 mt-1">24h average · all rooms</div>
-        </div>
         </div>
       </div>
 
-      {/* Charts Row */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        {/* Temperature Trend */}
-        <div className="bg-white rounded-2xl p-6 shadow-lg border border-gray-100">
+      {/* ── Sensor KPI cards ── */}
+      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-4" style={{ gap: '1.25rem' }}>
+        {SENSOR_CONFIG.map(({ key, label, icon: Icon, iconBg, iconColor, iconBorder, format }) => {
+          const value = sensorValues[key];
+          const status = sensorStatuses[key];
+          return (
+            <div
+              key={key}
+              className="rounded-xl p-5 metric-card"
+              style={{
+                background: 'var(--card)',
+                border: '1px solid var(--gray-200)',
+              }}
+            >
+              <div className="flex items-center justify-between mb-4">
+                <div
+                  className="w-8 h-8 rounded-lg flex items-center justify-center"
+                  style={{ background: iconBg, border: `1px solid ${iconBorder}` }}
+                >
+                  <Icon style={{ width: 15, height: 15, color: iconColor }} />
+                </div>
+                {status != null ? (
+                  <span className={`px-1.5 py-0.5 text-[10px] font-semibold rounded-md ${comfortChipToneClass(status)}`}>
+                    {status.label}
+                  </span>
+                ) : (
+                  <span
+                    className="px-1.5 py-0.5 text-[10px] font-medium rounded-md"
+                    style={{ background: 'var(--gray-100)', color: 'var(--gray-400)' }}
+                  >
+                    --
+                  </span>
+                )}
+              </div>
+              <div
+                className="text-xl font-bold leading-none"
+                style={{ color: 'var(--gray-900)' }}
+              >
+                {value != null ? format(value) : '--'}
+              </div>
+              <div className="text-xs mt-1.5" style={{ color: 'var(--gray-500)' }}>
+                {label}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+
+      {/* ── Charts 2-column grid ── */}
+      <div
+        className="grid grid-cols-1 lg:grid-cols-2 gap-8 py-4"
+        style={{ gap: '1.75rem', paddingBlock: '0.75rem 1rem' }}
+      >
+        {/* Temperature */}
+        <div
+          className="rounded-2xl p-6 chart-card"
+          style={{ background: 'var(--card)', border: '1px solid var(--gray-200)', padding: '1.75rem' }}
+        >
           <div className="mb-6">
-            <h3 className="text-lg font-semibold text-gray-900">Temperature trend</h3>
-            <p className="text-sm text-gray-500">Last 24 hours · all rooms (hourly average)</p>
+            <h3 className="text-base font-semibold" style={{ color: 'var(--gray-900)' }}>
+              Temperature trend
+            </h3>
+            <p className="text-xs mt-0.5" style={{ color: 'var(--gray-500)' }}>
+              Last 24 hours · all rooms · hourly avg
+            </p>
           </div>
           {summary.temperatureData.length > 0 ? (
-            <ResponsiveContainer width="100%" height={240}>
+            <ResponsiveContainer width="100%" height={220}>
               <AreaChart data={summary.temperatureData}>
                 <defs>
                   <linearGradient id="dash-temp-grad" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="5%" stopColor="#f97316" stopOpacity={0.3} />
+                    <stop offset="5%" stopColor="#f97316" stopOpacity={0.25} />
                     <stop offset="95%" stopColor="#f97316" stopOpacity={0} />
                   </linearGradient>
                 </defs>
-                <CartesianGrid strokeDasharray="3 3" stroke="#f3f4f6" />
-                <XAxis dataKey="time" stroke="#9ca3af" fontSize={12} />
-                <YAxis stroke="#9ca3af" fontSize={12} domain={['auto', 'auto']} />
-                <Tooltip />
-                <Area type="monotone" dataKey="value" stroke="#f97316" strokeWidth={2} fill="url(#dash-temp-grad)" />
+                <CartesianGrid strokeDasharray="3 3" stroke="var(--gray-100)" />
+                <XAxis dataKey="time" stroke="var(--gray-300)" fontSize={11} tickLine={false} />
+                <YAxis stroke="var(--gray-300)" fontSize={11} tickLine={false} axisLine={false} domain={['auto', 'auto']} />
+                <Tooltip
+                  contentStyle={{
+                    background: 'var(--card)',
+                    border: '1px solid var(--gray-200)',
+                    borderRadius: 10,
+                    boxShadow: 'var(--shadow-md)',
+                    fontSize: 12,
+                    color: 'var(--gray-900)',
+                  }}
+                />
+                <Area type="monotone" dataKey="value" stroke="#f97316" strokeWidth={2} fill="url(#dash-temp-grad)" dot={false} />
               </AreaChart>
             </ResponsiveContainer>
           ) : (
@@ -275,20 +388,36 @@ export default function MainDashboard({ onNavigate }: MainDashboardProps) {
           )}
         </div>
 
-        {/* CO2 Trend */}
-        <div className="bg-white rounded-2xl p-6 shadow-lg border border-gray-100">
+        {/* CO2 */}
+        <div
+          className="rounded-2xl p-6 chart-card"
+          style={{ background: 'var(--card)', border: '1px solid var(--gray-200)', padding: '1.75rem' }}
+        >
           <div className="mb-6">
-            <h3 className="text-lg font-semibold text-gray-900">CO₂ level trend</h3>
-            <p className="text-sm text-gray-500">Last 24 hours · all rooms (hourly average)</p>
+            <h3 className="text-base font-semibold" style={{ color: 'var(--gray-900)' }}>
+              CO₂ level trend
+            </h3>
+            <p className="text-xs mt-0.5" style={{ color: 'var(--gray-500)' }}>
+              Last 24 hours · all rooms · hourly avg
+            </p>
           </div>
           {summary.co2Data.length > 0 ? (
-            <ResponsiveContainer width="100%" height={240}>
+            <ResponsiveContainer width="100%" height={220}>
               <LineChart data={summary.co2Data}>
-                <CartesianGrid strokeDasharray="3 3" stroke="#f3f4f6" />
-                <XAxis dataKey="time" stroke="#9ca3af" fontSize={12} />
-                <YAxis stroke="#9ca3af" fontSize={12} domain={['auto', 'auto']} />
-                <Tooltip />
-                <Line type="monotone" dataKey="value" stroke="#3b82f6" strokeWidth={2} dot={{ fill: '#3b82f6', r: 4 }} />
+                <CartesianGrid strokeDasharray="3 3" stroke="var(--gray-100)" />
+                <XAxis dataKey="time" stroke="var(--gray-300)" fontSize={11} tickLine={false} />
+                <YAxis stroke="var(--gray-300)" fontSize={11} tickLine={false} axisLine={false} domain={['auto', 'auto']} />
+                <Tooltip
+                  contentStyle={{
+                    background: 'var(--card)',
+                    border: '1px solid var(--gray-200)',
+                    borderRadius: 10,
+                    boxShadow: 'var(--shadow-md)',
+                    fontSize: 12,
+                    color: 'var(--gray-900)',
+                  }}
+                />
+                <Line type="monotone" dataKey="value" stroke="#3b82f6" strokeWidth={2} dot={false} />
               </LineChart>
             </ResponsiveContainer>
           ) : (
@@ -296,26 +425,42 @@ export default function MainDashboard({ onNavigate }: MainDashboardProps) {
           )}
         </div>
 
-        {/* Light trend (24h · toutes salles) */}
-        <div className="bg-white rounded-2xl p-6 shadow-lg border border-gray-100">
+        {/* Light */}
+        <div
+          className="rounded-2xl p-6 chart-card"
+          style={{ background: 'var(--card)', border: '1px solid var(--gray-200)', padding: '1.75rem' }}
+        >
           <div className="mb-6">
-            <h3 className="text-lg font-semibold text-gray-900">Light intensity trend</h3>
-            <p className="text-sm text-gray-500">Last 24 hours · all rooms (hourly average)</p>
+            <h3 className="text-base font-semibold" style={{ color: 'var(--gray-900)' }}>
+              Light intensity trend
+            </h3>
+            <p className="text-xs mt-0.5" style={{ color: 'var(--gray-500)' }}>
+              Last 24 hours · all rooms · hourly avg
+            </p>
           </div>
           {summary.lightData.length > 0 ? (
-            <ResponsiveContainer width="100%" height={240}>
+            <ResponsiveContainer width="100%" height={220}>
               <AreaChart data={summary.lightData}>
                 <defs>
                   <linearGradient id="dash-light-grad" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="5%" stopColor="#f59e0b" stopOpacity={0.35} />
+                    <stop offset="5%" stopColor="#f59e0b" stopOpacity={0.3} />
                     <stop offset="95%" stopColor="#f59e0b" stopOpacity={0} />
                   </linearGradient>
                 </defs>
-                <CartesianGrid strokeDasharray="3 3" stroke="#f3f4f6" />
-                <XAxis dataKey="time" stroke="#9ca3af" fontSize={12} />
-                <YAxis stroke="#9ca3af" fontSize={12} domain={['auto', 'auto']} unit=" lx" />
-                <Tooltip />
-                <Area type="monotone" dataKey="value" stroke="#f59e0b" strokeWidth={2} fill="url(#dash-light-grad)" />
+                <CartesianGrid strokeDasharray="3 3" stroke="var(--gray-100)" />
+                <XAxis dataKey="time" stroke="var(--gray-300)" fontSize={11} tickLine={false} />
+                <YAxis stroke="var(--gray-300)" fontSize={11} tickLine={false} axisLine={false} domain={['auto', 'auto']} unit=" lx" />
+                <Tooltip
+                  contentStyle={{
+                    background: 'var(--card)',
+                    border: '1px solid var(--gray-200)',
+                    borderRadius: 10,
+                    boxShadow: 'var(--shadow-md)',
+                    fontSize: 12,
+                    color: 'var(--gray-900)',
+                  }}
+                />
+                <Area type="monotone" dataKey="value" stroke="#f59e0b" strokeWidth={2} fill="url(#dash-light-grad)" dot={false} />
               </AreaChart>
             </ResponsiveContainer>
           ) : (
@@ -323,20 +468,36 @@ export default function MainDashboard({ onNavigate }: MainDashboardProps) {
           )}
         </div>
 
-        {/* Noise trend */}
-        <div className="bg-white rounded-2xl p-6 shadow-lg border border-gray-100">
+        {/* Noise */}
+        <div
+          className="rounded-2xl p-6 chart-card"
+          style={{ background: 'var(--card)', border: '1px solid var(--gray-200)', padding: '1.75rem' }}
+        >
           <div className="mb-6">
-            <h3 className="text-lg font-semibold text-gray-900">Noise level trend</h3>
-            <p className="text-sm text-gray-500">Last 24 hours · all rooms (hourly average)</p>
+            <h3 className="text-base font-semibold" style={{ color: 'var(--gray-900)' }}>
+              Noise level trend
+            </h3>
+            <p className="text-xs mt-0.5" style={{ color: 'var(--gray-500)' }}>
+              Last 24 hours · all rooms · hourly avg
+            </p>
           </div>
           {summary.noiseData.length > 0 ? (
-            <ResponsiveContainer width="100%" height={240}>
+            <ResponsiveContainer width="100%" height={220}>
               <LineChart data={summary.noiseData}>
-                <CartesianGrid strokeDasharray="3 3" stroke="#f3f4f6" />
-                <XAxis dataKey="time" stroke="#9ca3af" fontSize={12} />
-                <YAxis stroke="#9ca3af" fontSize={12} domain={['auto', 'auto']} unit=" dB" />
-                <Tooltip />
-                <Line type="monotone" dataKey="value" stroke="#a855f7" strokeWidth={2} dot={{ fill: '#a855f7', r: 3 }} />
+                <CartesianGrid strokeDasharray="3 3" stroke="var(--gray-100)" />
+                <XAxis dataKey="time" stroke="var(--gray-300)" fontSize={11} tickLine={false} />
+                <YAxis stroke="var(--gray-300)" fontSize={11} tickLine={false} axisLine={false} domain={['auto', 'auto']} unit=" dB" />
+                <Tooltip
+                  contentStyle={{
+                    background: 'var(--card)',
+                    border: '1px solid var(--gray-200)',
+                    borderRadius: 10,
+                    boxShadow: 'var(--shadow-md)',
+                    fontSize: 12,
+                    color: 'var(--gray-900)',
+                  }}
+                />
+                <Line type="monotone" dataKey="value" stroke="#a855f7" strokeWidth={2} dot={false} />
               </LineChart>
             </ResponsiveContainer>
           ) : (
@@ -345,87 +506,84 @@ export default function MainDashboard({ onNavigate }: MainDashboardProps) {
         </div>
       </div>
 
-      {/* AI Recommendations Panel */}
-      <div className="bg-gradient-to-br from-emerald-50 to-blue-50 rounded-2xl p-6 border border-emerald-200/50">
-        <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
-          <div className="flex items-start space-x-4 min-w-0 flex-1">
-            <div className="w-12 h-12 bg-gradient-to-br from-emerald-400 to-emerald-600 rounded-xl flex items-center justify-center flex-shrink-0">
-              <Brain className="w-6 h-6 text-white" />
+      {/* ── AI Recommendations ── */}
+      <div
+        className="rounded-2xl overflow-hidden"
+        style={{
+          background: 'var(--card)',
+          border: '1px solid var(--gray-200)',
+          boxShadow: 'var(--shadow-sm)',
+        }}
+      >
+        {/* AI panel header */}
+        <div
+          className="flex items-center justify-between px-6 py-5 ai-panel-header"
+          style={{ borderBottom: '1px solid var(--gray-200)' }}
+        >
+          <div className="flex items-center gap-3">
+            <div
+              className="w-9 h-9 rounded-xl flex items-center justify-center shrink-0"
+              style={{ background: 'linear-gradient(135deg, #10b981, #059669)', boxShadow: '0 3px 10px rgba(16,185,129,0.3)' }}
+            >
+              <Brain className="w-4 h-4 text-white" />
             </div>
-            <div className="flex-1 min-w-0">
-              <h3 className="text-lg font-semibold text-gray-900 mb-1">AI Recommendations</h3>
-              <p className="text-xs text-gray-500 mb-2">
-                Suggestions basées sur les dernières mesures par salle (seuils réglables dans Settings → AI Config).
+            <div>
+              <p className="text-sm font-bold" style={{ color: 'var(--gray-900)' }}>
+                AI Recommendations
               </p>
-              {!aiAutoApply ? (
-                <p className="text-xs text-amber-800 bg-amber-100/80 border border-amber-200 rounded-lg px-2 py-1.5 mb-2">
-                  Auto-apply is off in Settings → AI Config; suggestions below are for manual review only.
-                </p>
-              ) : null}
-              <div className="space-y-2">
-                {aiRecs.length === 0 ? (
-                  <p className="text-sm text-gray-600">
-                    No sensor-based suggestions yet. Add measurements to rooms (or lower aggressiveness in AI Config) to see
-                    recommendations here.
-                  </p>
-                ) : (
-                  aiRecs.map((rec, i) => (
-                    <div key={`${rec.roomName}-${i}`} className="flex items-start space-x-2">
-                      <div
-                        className={`w-1.5 h-1.5 rounded-full mt-2 shrink-0 ${
-                          rec.tone === 'emerald'
-                            ? 'bg-emerald-500'
-                            : rec.tone === 'blue'
-                              ? 'bg-blue-500'
-                              : 'bg-amber-500'
-                        }`}
-                      />
-                      <p className="text-sm text-gray-700">
-                        <span className="font-medium">{rec.roomName}:</span> {rec.text}
-                      </p>
-                    </div>
-                  ))
-                )}
-              </div>
+              <p className="text-xs" style={{ color: 'var(--gray-500)' }}>
+                Based on latest sensor readings
+              </p>
             </div>
           </div>
-          <button
-            type="button"
-            onClick={() => onNavigate('rooms')}
-            className="px-4 py-2 bg-white text-emerald-600 rounded-xl font-medium hover:bg-emerald-50 transition shadow-sm shrink-0 self-start"
-          >
-            View Rooms
-          </button>
+          <div className="flex items-center gap-2">
+            {!aiAutoApply && (
+              <span className="hidden sm:inline text-xs px-2 py-1 rounded-lg font-medium auto-apply-badge">
+                Auto-apply off
+              </span>
+            )}
+            <button
+              type="button"
+              onClick={() => onNavigate('rooms')}
+              className="text-xs px-3 py-1.5 rounded-lg font-semibold text-white transition"
+              style={{ background: '#10b981' }}
+            >
+              View rooms
+            </button>
+          </div>
         </div>
-      </div>
 
-      {/* Room Status Overview */}
-      <div className="bg-white rounded-2xl p-6 shadow-lg border border-gray-100">
-        <div className="flex items-center justify-between mb-6">
-          <div>
-            <h3 className="text-lg font-semibold text-gray-900">Room Status Overview</h3>
-            <p className="text-sm text-gray-500">{summary.roomOverview.total} total rooms</p>
-          </div>
-          <button
-            onClick={() => onNavigate('rooms')}
-            className="px-4 py-2 bg-emerald-500 text-white rounded-xl font-medium hover:bg-emerald-600 transition"
-          >
-            View All Rooms
-          </button>
-        </div>
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-          <div className="bg-emerald-50 rounded-xl p-4 border border-emerald-200">
-            <div className="text-2xl font-bold text-emerald-600 mb-1">{summary.roomOverview.available}</div>
-            <div className="text-sm text-gray-600">Available Rooms</div>
-          </div>
-          <div className="bg-blue-50 rounded-xl p-4 border border-blue-200">
-            <div className="text-2xl font-bold text-blue-600 mb-1">{summary.roomOverview.occupied}</div>
-            <div className="text-sm text-gray-600">Occupied Rooms</div>
-          </div>
-          <div className="bg-amber-50 rounded-xl p-4 border border-amber-200">
-            <div className="text-2xl font-bold text-amber-600 mb-1">{summary.roomOverview.maintenance}</div>
-            <div className="text-sm text-gray-600">Maintenance Required</div>
-          </div>
+        {/* AI rec list */}
+        <div className="p-6">
+          {aiRecs.length === 0 ? (
+            <p className="text-sm text-center py-4" style={{ color: 'var(--gray-400)' }}>
+              No suggestions — add sensor data to rooms or lower AI aggressiveness in settings.
+            </p>
+          ) : (
+            <div className="grid gap-3 sm:grid-cols-2">
+              {aiRecs.map((rec, i) => {
+                const tone = rec.tone as string;
+                const dotColor: Record<string, string> = { emerald: '#10b981', blue: '#3b82f6', amber: '#f59e0b' };
+                const toneClassMap: Record<string, string> = { emerald: 'rec-chip-emerald', blue: 'rec-chip-blue', amber: 'rec-chip-amber' };
+                const dot = dotColor[tone] ?? 'var(--gray-400)';
+                const toneClass = toneClassMap[tone] ?? 'rec-chip-default';
+                return (
+                  <div
+                    key={`${rec.roomName}-${i}`}
+                    className={`flex items-start gap-3 rounded-xl px-4 py-3 text-sm rec-chip ${toneClass}`}
+                  >
+                    <span
+                      className="w-1.5 h-1.5 rounded-full mt-1.5 shrink-0"
+                      style={{ background: dot }}
+                    />
+                    <p>
+                      <span className="font-semibold">{rec.roomName}:</span> {rec.text}
+                    </p>
+                  </div>
+                );
+              })}
+            </div>
+          )}
         </div>
       </div>
     </div>

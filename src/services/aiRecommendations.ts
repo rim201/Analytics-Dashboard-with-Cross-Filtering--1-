@@ -1,6 +1,14 @@
-import { LUX_IDEAL_MAX, LUX_IDEAL_MIN, PM25_POLLUTED_GT, TEMP_IDEAL_MAX, TEMP_IDEAL_MIN } from './sensorComfortRules';
+import {
+  HUMIDITY_IDEAL_MAX,
+  HUMIDITY_IDEAL_MIN,
+  LUX_IDEAL_MAX,
+  LUX_IDEAL_MIN,
+  PM25_POLLUTED_GT,
+  TEMP_IDEAL_MAX,
+  TEMP_IDEAL_MIN,
+} from './sensorComfortRules';
 
-/** Paramètres dérivés de l’agressivité 1–10 (plus élevé = seuils plus serrés, plus de suggestions). */
+/** Paramètres dérivés de l'agressivité 1–10 (plus élevé = seuils plus serrés, plus de suggestions). */
 export function thresholdsForAggressiveness(aggressiveness: number) {
   const a = Math.min(10, Math.max(1, Math.round(aggressiveness)));
   return {
@@ -126,4 +134,109 @@ export function buildAiRecommendationsFromRooms(
   }
 
   return out.slice(0, limit);
+}
+
+// —— Auto-alert generation from sensor readings —— //
+
+export type SensorAlertCandidate = {
+  roomId: string;
+  roomName: string;
+  type: 'critical' | 'warning';
+  title: string;
+  message: string;
+  category: string;
+  /** Clé de déduplication (roomId + type de condition). */
+  key: string;
+};
+
+type SensorInput = {
+  id: string;
+  name: string;
+  temperature: number | null;
+  humidity: number | null;
+  co2: number | null;
+  noise: number | null;
+  pm25: number | null;
+};
+
+/**
+ * Retourne les alertes capteurs à créer pour une liste de salles.
+ * L'appelant est responsable du throttle (éviter doublons en mémoire).
+ */
+export function buildSensorAlertCandidates(rooms: SensorInput[]): SensorAlertCandidate[] {
+  const candidates: SensorAlertCandidate[] = [];
+
+  for (const r of rooms) {
+    if (r.co2 != null) {
+      if (r.co2 > 1500) {
+        candidates.push({
+          roomId: r.id, roomName: r.name, type: 'critical',
+          key: `${r.id}-co2-critical`,
+          title: `CO₂ critique — ${r.name}`,
+          message: `CO₂ à ${Math.round(r.co2)} ppm (seuil critique 1500 ppm). Ventilation immédiate requise.`,
+          category: "Qualité de l'air",
+        });
+      } else if (r.co2 > 1000) {
+        candidates.push({
+          roomId: r.id, roomName: r.name, type: 'warning',
+          key: `${r.id}-co2-warning`,
+          title: `CO₂ élevé — ${r.name}`,
+          message: `CO₂ à ${Math.round(r.co2)} ppm (recommandé < 1000 ppm). Améliorer la ventilation.`,
+          category: "Qualité de l'air",
+        });
+      }
+    }
+
+    if (r.temperature != null) {
+      if (r.temperature > 30 || r.temperature < 15) {
+        candidates.push({
+          roomId: r.id, roomName: r.name, type: 'critical',
+          key: `${r.id}-temp-critical`,
+          title: `Température hors zone — ${r.name}`,
+          message: `Température à ${r.temperature.toFixed(1)}°C (zone confort : ${TEMP_IDEAL_MIN}–${TEMP_IDEAL_MAX}°C). Action HVAC requise.`,
+          category: 'Température',
+        });
+      } else if (r.temperature > 27 || r.temperature < 18) {
+        candidates.push({
+          roomId: r.id, roomName: r.name, type: 'warning',
+          key: `${r.id}-temp-warning`,
+          title: `Température élevée — ${r.name}`,
+          message: `Température à ${r.temperature.toFixed(1)}°C, hors de la zone confort (${TEMP_IDEAL_MIN}–${TEMP_IDEAL_MAX}°C).`,
+          category: 'Température',
+        });
+      }
+    }
+
+    if (r.humidity != null) {
+      if (r.humidity > 75 || r.humidity < 25) {
+        candidates.push({
+          roomId: r.id, roomName: r.name, type: 'critical',
+          key: `${r.id}-humidity-critical`,
+          title: `Humidité critique — ${r.name}`,
+          message: `Humidité à ${Math.round(r.humidity)}% (zone confort : ${HUMIDITY_IDEAL_MIN}–${HUMIDITY_IDEAL_MAX}%). Vérifier système de ventilation.`,
+          category: 'Humidité',
+        });
+      } else if (r.humidity > 65 || r.humidity < 30) {
+        candidates.push({
+          roomId: r.id, roomName: r.name, type: 'warning',
+          key: `${r.id}-humidity-warning`,
+          title: `Humidité anormale — ${r.name}`,
+          message: `Humidité à ${Math.round(r.humidity)}% (zone confort : ${HUMIDITY_IDEAL_MIN}–${HUMIDITY_IDEAL_MAX}%).`,
+          category: 'Humidité',
+        });
+      }
+    }
+
+    if (r.pm25 != null && r.pm25 > PM25_POLLUTED_GT) {
+      candidates.push({
+        roomId: r.id, roomName: r.name, type: 'warning',
+        key: `${r.id}-pm25`,
+        title: `Air pollué (PM2.5) — ${r.name}`,
+        message: `PM2.5 à ${r.pm25.toFixed(1)} µg/m³ (seuil : ${PM25_POLLUTED_GT} µg/m³). Activer filtration.`,
+        category: "Qualité de l'air",
+      });
+    }
+  }
+
+  return candidates;
 }
