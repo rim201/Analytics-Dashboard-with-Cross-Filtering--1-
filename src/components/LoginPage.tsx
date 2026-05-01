@@ -5,6 +5,7 @@ import {
   clearLoginNoticeStorage,
   signInWithCredentials,
 } from '../services/auth';
+import { useLang } from '../i18n/LanguageContext';
 
 function readInitialLoginNotice(): string | null {
   try {
@@ -19,46 +20,47 @@ function readInitialLoginNotice(): string | null {
   return null;
 }
 
-const FEATURE_TILES = [
-  {
-    icon: Thermometer,
-    label: 'Temperature',
-    sublabel: 'Real-time monitoring',
-    from: '#fef3c7',
-    to: '#fde68a',
-    iconColor: '#d97706',
-  },
-  {
-    icon: Wind,
-    label: 'Air Quality',
-    sublabel: 'CO₂ & PM sensors',
-    from: '#dbeafe',
-    to: '#bfdbfe',
-    iconColor: '#2563eb',
-  },
-  {
-    icon: Zap,
-    label: 'Energy',
-    sublabel: 'Smart optimization',
-    from: '#d1fae5',
-    to: '#a7f3d0',
-    iconColor: '#059669',
-  },
-  {
-    icon: Wifi,
-    label: 'IoT Sensors',
-    sublabel: 'Connected devices',
-    from: '#ede9fe',
-    to: '#ddd6fe',
-    iconColor: '#7c3aed',
-  },
-];
-
 export default function LoginPage() {
+  const { t } = useLang();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(() => readInitialLoginNotice());
+
+  const FEATURE_TILES = [
+    {
+      icon: Thermometer,
+      label: t.login.tileTempLabel,
+      sublabel: t.login.tileTempSub,
+      from: '#fef3c7',
+      to: '#fde68a',
+      iconColor: '#d97706',
+    },
+    {
+      icon: Wind,
+      label: t.login.tileAirLabel,
+      sublabel: t.login.tileAirSub,
+      from: '#dbeafe',
+      to: '#bfdbfe',
+      iconColor: '#2563eb',
+    },
+    {
+      icon: Zap,
+      label: t.login.tileEnergyLabel,
+      sublabel: t.login.tileEnergySub,
+      from: '#d1fae5',
+      to: '#a7f3d0',
+      iconColor: '#059669',
+    },
+    {
+      icon: Wifi,
+      label: t.login.tileIotLabel,
+      sublabel: t.login.tileIotSub,
+      from: '#ede9fe',
+      to: '#ddd6fe',
+      iconColor: '#7c3aed',
+    },
+  ];
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -70,7 +72,7 @@ export default function LoginPage() {
     } catch (e: unknown) {
       const code =
         e && typeof e === 'object' && 'code' in e ? String((e as { code: string }).code) : '';
-      setError(code ? authErrorMessage(code) : 'Sign-in failed. Please try again.');
+      setError(code ? authErrorMessage(code) : t.login.signInFailed);
     } finally {
       setSubmitting(false);
     }
@@ -122,10 +124,10 @@ export default function LoginPage() {
               className="text-2xl font-bold mb-2"
               style={{ color: 'var(--gray-900)', letterSpacing: '-0.03em' }}
             >
-              Smart Building Intelligence
+              {t.login.headline}
             </h2>
             <p className="text-sm" style={{ color: 'var(--gray-500)' }}>
-              AI-powered environment optimization for modern workspaces
+              {t.login.subheadline}
             </p>
           </div>
 
@@ -166,7 +168,7 @@ export default function LoginPage() {
               className="w-2 h-2 rounded-full animate-pulse"
               style={{ background: '#10b981', boxShadow: '0 0 0 3px rgba(16,185,129,0.2)' }}
             />
-            Live sensor data · Firestore real-time sync
+            {t.login.trustBadge}
           </div>
         </div>
 
@@ -191,10 +193,10 @@ export default function LoginPage() {
               className="text-2xl font-bold mb-1"
               style={{ color: 'var(--gray-900)', letterSpacing: '-0.03em' }}
             >
-              Welcome back
+              {t.login.welcomeBack}
             </h1>
             <p className="text-sm" style={{ color: 'var(--gray-500)' }}>
-              Sign in to your SmartRoom account
+              {t.login.signInSubtitle}
             </p>
           </div>
 
@@ -221,7 +223,7 @@ export default function LoginPage() {
                 className="block text-sm font-medium mb-1.5"
                 style={{ color: 'var(--gray-700)' }}
               >
-                Email address
+                {t.login.emailLabel}
               </label>
               <div className="relative">
                 <Mail
@@ -254,7 +256,7 @@ export default function LoginPage() {
                 className="block text-sm font-medium mb-1.5"
                 style={{ color: 'var(--gray-700)' }}
               >
-                Password
+                {t.login.passwordLabel}
               </label>
               <div className="relative">
                 <Lock
@@ -266,7 +268,7 @@ export default function LoginPage() {
                   type="password"
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
-                  placeholder="Enter your password"
+                  placeholder={t.login.passwordPlaceholder}
                   className="w-full pl-10 pr-4 py-2.5 rounded-xl border outline-none transition"
                   style={{
                     borderColor: 'var(--gray-300)',
@@ -288,14 +290,14 @@ export default function LoginPage() {
                   className="w-4 h-4 rounded"
                   style={{ accentColor: '#10b981' }}
                 />
-                <span style={{ color: 'var(--gray-600)' }}>Remember me</span>
+                <span style={{ color: 'var(--gray-600)' }}>{t.login.rememberMe}</span>
               </label>
               <a
                 href="#"
                 className="font-medium text-sm transition"
                 style={{ color: '#059669' }}
               >
-                Forgot password?
+                {t.login.forgotPassword}
               </a>
             </div>
 
@@ -313,13 +315,13 @@ export default function LoginPage() {
                 letterSpacing: '0.01em',
               }}
             >
-              {submitting ? 'Signing in…' : 'Sign in'}
+              {submitting ? t.login.signingIn : t.login.signIn}
             </button>
           </form>
 
           {/* Footer note */}
           <p className="mt-6 text-center text-xs" style={{ color: 'var(--gray-400)' }}>
-            SmartRoom AI Manager · Secure sign-in
+            {t.login.footerNote}
           </p>
         </div>
       </div>

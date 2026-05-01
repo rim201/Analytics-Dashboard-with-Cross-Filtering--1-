@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { Lock, Zap } from 'lucide-react';
 import { completeFirstLoginPasswordChange, authErrorMessage } from '../services/auth';
+import { useLang } from '../i18n/LanguageContext';
 
 interface Props {
   displayName: string;
@@ -9,6 +10,7 @@ interface Props {
 }
 
 export default function FirstLoginPasswordChange({ displayName, email, onSuccess }: Props) {
+  const { t } = useLang();
   const [password, setPassword] = useState('');
   const [confirm, setConfirm] = useState('');
   const [submitting, setSubmitting] = useState(false);
@@ -18,11 +20,11 @@ export default function FirstLoginPasswordChange({ displayName, email, onSuccess
     e.preventDefault();
     setError(null);
     if (password.length < 6) {
-      setError('Le mot de passe doit contenir au moins 6 caractères.');
+      setError(t.firstLogin.errorMinLength);
       return;
     }
     if (password !== confirm) {
-      setError('Les mots de passe ne correspondent pas.');
+      setError(t.firstLogin.errorMismatch);
       return;
     }
     setSubmitting(true);
@@ -33,9 +35,9 @@ export default function FirstLoginPasswordChange({ displayName, email, onSuccess
       const code =
         e && typeof e === 'object' && 'code' in e ? String((e as { code: string }).code) : '';
       if (code === 'auth/weak-password') {
-        setError('Mot de passe trop faible (minimum 6 caractères recommandé : plus long et varié).');
+        setError(t.firstLogin.errorWeakPassword);
       } else {
-        setError(code ? authErrorMessage(code) : 'Impossible de mettre à jour le mot de passe.');
+        setError(code ? authErrorMessage(code) : t.firstLogin.errorGeneric);
       }
     } finally {
       setSubmitting(false);
@@ -49,9 +51,9 @@ export default function FirstLoginPasswordChange({ displayName, email, onSuccess
           <div className="inline-flex items-center justify-center w-14 h-14 bg-gradient-to-br from-emerald-400 to-emerald-600 rounded-2xl mb-3">
             <Zap className="w-7 h-7 text-white" />
           </div>
-          <h1 className="text-xl font-bold text-gray-900">Première connexion</h1>
+          <h1 className="text-xl font-bold text-gray-900">{t.firstLogin.title}</h1>
           <p className="text-sm text-gray-600 mt-1">
-            Bonjour <span className="font-medium text-gray-900">{displayName}</span> — définissez votre mot de passe personnel pour continuer.
+            {t.firstLogin.greeting(displayName)}
           </p>
           <p className="text-xs text-gray-500 mt-2 font-mono">{email}</p>
         </div>
@@ -68,7 +70,7 @@ export default function FirstLoginPasswordChange({ displayName, email, onSuccess
 
           <div>
             <label htmlFor="first-pw" className="block text-sm font-medium text-gray-700 mb-1">
-              Nouveau mot de passe
+              {t.firstLogin.newPasswordLabel}
             </label>
             <div className="relative">
               <Lock className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-400" />
@@ -88,7 +90,7 @@ export default function FirstLoginPasswordChange({ displayName, email, onSuccess
 
           <div>
             <label htmlFor="first-pw2" className="block text-sm font-medium text-gray-700 mb-1">
-              Confirmer le mot de passe
+              {t.firstLogin.confirmPasswordLabel}
             </label>
             <div className="relative">
               <Lock className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-400" />
@@ -111,7 +113,7 @@ export default function FirstLoginPasswordChange({ displayName, email, onSuccess
             disabled={submitting}
             className="w-full bg-gradient-to-r from-emerald-500 to-emerald-600 text-white py-3 rounded-xl font-medium hover:from-emerald-600 hover:to-emerald-700 shadow-lg shadow-emerald-500/30 disabled:opacity-60"
           >
-            {submitting ? 'Enregistrement…' : 'Enregistrer et accéder à l’application'}
+            {submitting ? t.firstLogin.saving : t.firstLogin.saveButton}
           </button>
         </form>
       </div>

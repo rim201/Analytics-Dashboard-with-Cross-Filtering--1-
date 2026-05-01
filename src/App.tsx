@@ -1,5 +1,7 @@
 import React, { useState, useEffect } from 'react';
+import { LanguageProvider, useLang } from './i18n/LanguageContext';
 import { useMotionWatchdog } from './hooks/useMotionWatchdog';
+import { useInactivityLogout } from './hooks/useInactivityLogout';
 import { onAuthStateChanged } from 'firebase/auth';
 import type { User } from 'firebase/auth';
 import LoginPage from './components/LoginPage';
@@ -33,7 +35,15 @@ export type PageType =
   | 'alerts'
   | 'settings';
 
-function App() {
+export default function App() {
+  return (
+    <LanguageProvider>
+      <AppInner />
+    </LanguageProvider>
+  );
+}
+
+function AppInner() {
   const [currentPage, setCurrentPage] = useState<PageType>('dashboard');
   const [authReady, setAuthReady] = useState(false);
   const [authUser, setAuthUser] = useState<User | null>(null);
@@ -63,9 +73,23 @@ function App() {
     });
   };
 
+  const { t } = useLang();
   const isAdmin = userProfile?.role === 'admin';
+  const [showInactivityWarning, setShowInactivityWarning] = useState(false);
 
   useMotionWatchdog(!!authUser);
+
+  useInactivityLogout(
+    !!authUser && !userProfile?.mustChangePassword,
+    () => setShowInactivityWarning(true),
+    () => {
+      setShowInactivityWarning(false);
+      try {
+        sessionStorage.setItem('loginNotice', t.inactivityLoggedOut);
+      } catch { /* ignore */ }
+      void signOutSession();
+    },
+  );
   const canAccessAlerts = canAccessAlertsAndNotifications(userProfile?.role);
   const canModerateAlertActions = canModerateAlerts(userProfile?.role);
 
@@ -157,7 +181,7 @@ function App() {
         className="min-h-screen flex items-center justify-center"
         style={{ background: 'var(--background)', color: 'var(--gray-600)' }}
       >
-        Chargement…
+        {t.loading}
       </div>
     );
   }
@@ -194,6 +218,39 @@ function App() {
 
   return (
     <div className="flex h-screen" style={{ background: 'var(--background)' }}>
+      {showInactivityWarning && (
+        <div
+          style={{
+            position: 'fixed',
+            bottom: '1.5rem',
+            left: '50%',
+            transform: 'translateX(-50%)',
+            zIndex: 9999,
+            background: '#eff6ff',
+            border: '1px solid #bfdbfe',
+            color: '#1d4ed8',
+            borderRadius: '0.75rem',
+            padding: '0.75rem 1.25rem',
+            fontSize: '0.875rem',
+            fontWeight: 500,
+            boxShadow: '0 4px 16px rgba(0,0,0,0.12)',
+            display: 'flex',
+            alignItems: 'center',
+            gap: '0.75rem',
+            maxWidth: '90vw',
+          }}
+          role="alert"
+        >
+          <span>{t.inactivityWarning}</span>
+          <button
+            onClick={() => setShowInactivityWarning(false)}
+            style={{ marginLeft: 'auto', opacity: 0.6, fontSize: '1rem', lineHeight: 1, background: 'none', border: 'none', cursor: 'pointer', color: 'inherit' }}
+            aria-label="Dismiss"
+          >
+            ✕
+          </button>
+        </div>
+      )}
       <Sidebar
         currentPage={currentPage}
         onNavigate={handleNavigate}
@@ -241,4 +298,3 @@ function App() {
   );
 }
 
-export default App;

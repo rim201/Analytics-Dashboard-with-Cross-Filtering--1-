@@ -8,6 +8,8 @@ import {
   Droplets,
   Brain,
   Factory,
+  Eye,
+  EyeOff,
 } from 'lucide-react';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
 import '../styles/custom.css';
@@ -33,6 +35,8 @@ import {
   updateRoomLight,
   type MeasurementRow,
 } from '../services/firestoreApi';
+import { useLang } from '../i18n/LanguageContext';
+import { translateChipLabel, translations } from '../i18n/translations';
 
 const LUX_MIN = 150;
 const LUX_MAX = 1000;
@@ -50,9 +54,12 @@ interface RoomInfo {
   capacity: number;
   occupancy: number;
   status: 'available' | 'busy';
+  lastMotionAt: string | null;
 }
 
 export default function RoomDetails({ roomId, onBack, isAdmin = false }: RoomDetailsProps) {
+  const { t, lang } = useLang();
+
   const [measurements, setMeasurements] = useState<MeasurementRow[]>([]);
   const [roomInfo, setRoomInfo] = useState<RoomInfo | null>(null);
   const [loading, setLoading] = useState(true);
@@ -61,6 +68,7 @@ export default function RoomDetails({ roomId, onBack, isAdmin = false }: RoomDet
   const [lightSaving, setLightSaving] = useState(false);
   const [lightError, setLightError] = useState<string | null>(null);
   const [aiAggressiveness, setAiAggressiveness] = useState(7);
+  const [showLightControl, setShowLightControl] = useState(false);
   const numericRoomId = roomId?.replace(/^room-/, '') ?? '';
 
   useEffect(() => {
@@ -115,6 +123,7 @@ export default function RoomDetails({ roomId, onBack, isAdmin = false }: RoomDet
           capacity: r.capacity,
           occupancy: r.occupancy,
           status: r.status,
+          lastMotionAt: r.lastMotionAt ?? null,
         });
       },
       () => setRoomInfo(null),
@@ -122,7 +131,6 @@ export default function RoomDetails({ roomId, onBack, isAdmin = false }: RoomDet
     return unsub;
   }, [numericRoomId]);
 
-  /** Dernière mesure par date/heure (les plus récentes en tête côté API ; on garde un max explicite). */
   const latest = useMemo(() => {
     if (measurements.length === 0) return null;
     return measurements.reduce((best, m) => {
@@ -152,12 +160,21 @@ export default function RoomDetails({ roomId, onBack, isAdmin = false }: RoomDet
 
   const hasChartData = chartData.length > 0;
 
+  function formatTimeSince(iso: string): string {
+    const diffMs = Date.now() - new Date(iso).getTime();
+    const diffMin = Math.floor(diffMs / 60_000);
+    if (diffMin < 1) return t.motionJustNow;
+    if (diffMin < 60) return t.motionMinutesAgo(diffMin);
+    return t.motionHoursAgo(Math.floor(diffMin / 60));
+  }
+
   const roomMeta = useMemo(
     () => ({
       name: roomInfo?.name || 'Room',
       status: roomInfo?.status === 'busy' ? ('occupied' as const) : ('available' as const),
       occupancy: roomInfo?.occupancy ?? 0,
       capacity: roomInfo?.capacity ?? 0,
+      lastMotionAt: roomInfo?.lastMotionAt ?? null,
     }),
     [roomInfo],
   );
@@ -189,40 +206,41 @@ export default function RoomDetails({ roomId, onBack, isAdmin = false }: RoomDet
       try {
         await updateRoomLight(numericRoomId, v);
       } catch {
-        setLightError('Enregistrement impossible. Réessayez.');
+        setLightError(translations[lang].lightSaveError);
       } finally {
         setLightSaving(false);
       }
     },
-    [numericRoomId, isAdmin],
+    [numericRoomId, isAdmin, lang],
   );
 
   const aiInsights = useMemo(() => {
-    const t = thresholdsForAggressiveness(aiAggressiveness);
+    const ai = translations[lang].ai;
+    const thr = thresholdsForAggressiveness(aiAggressiveness);
     const messages: { title: string; text: string; tone: 'blue' | 'purple' | 'green' }[] = [];
     const name = roomMeta.name;
 
     if (!latest) {
       return [
         {
-          title: 'No measurements yet',
-          text: `${name}: Charts and live KPIs use the latest saved point by date and time. Add measurements from room updates or admin capture.`,
+          title: ai.noMeasurementsTitle,
+          text: ai.noMeasurementsText(name),
           tone: 'blue' as const,
         },
       ];
     }
 
     if (latest.co2 != null) {
-      if (latest.co2 > t.co2High) {
+      if (latest.co2 > thr.co2High) {
         messages.push({
-          title: 'Air Quality Alert',
-          text: `${name}: CO₂ at ${Math.round(latest.co2)} ppm (above ~${Math.round(t.co2High)} ppm). Increasing ventilation to keep focus and comfort at optimal levels.`,
+          title: ai.airQualityAlertTitle,
+          text: ai.airQualityAlertText(name, Math.round(latest.co2), Math.round(thr.co2High)),
           tone: 'blue',
         });
       } else {
         messages.push({
-          title: 'Air Quality Stable',
-          text: `${name}: CO₂ is under control (${Math.round(latest.co2)} ppm). Ventilation remains in efficient mode.`,
+          title: ai.airQualityStableTitle,
+          text: ai.airQualityStableText(name, Math.round(latest.co2)),
           tone: 'blue',
         });
       }
@@ -230,20 +248,20 @@ export default function RoomDetails({ roomId, onBack, isAdmin = false }: RoomDet
       const pm = latest.pm25;
       if (pm > PM25_POLLUTED_GT) {
         messages.push({
-          title: 'Particules PM2.5',
-          text: `${name}: air pollué (PM2.5 ~${pm.toFixed(1)} µg/m³, seuil > ${PM25_POLLUTED_GT}). Ventilation ou filtration (SDS011).`,
+          title: ai.pm25Title,
+          text: ai.pm25PollutedText(name, pm.toFixed(1), PM25_POLLUTED_GT),
           tone: 'blue',
         });
       } else if (pm >= 15) {
         messages.push({
-          title: 'Particules PM2.5',
-          text: `${name}: PM2.5 modéré (${pm.toFixed(1)} µg/m³). Entre « air bon » (< 15) et « pollué » (> ${PM25_POLLUTED_GT}).`,
+          title: ai.pm25Title,
+          text: ai.pm25ModerateText(name, pm.toFixed(1), PM25_POLLUTED_GT),
           tone: 'blue',
         });
       } else {
         messages.push({
-          title: 'Particules PM2.5',
-          text: `${name}: air bon (PM2.5 ~${pm.toFixed(1)} µg/m³ < 15).`,
+          title: ai.pm25Title,
+          text: ai.pm25GoodText(name, pm.toFixed(1)),
           tone: 'blue',
         });
       }
@@ -251,64 +269,64 @@ export default function RoomDetails({ roomId, onBack, isAdmin = false }: RoomDet
       const p10 = latest.pm10;
       if (p10 > PM10_POLLUTED_GT) {
         messages.push({
-          title: 'Particules PM10',
-          text: `${name}: air pollué (PM10 ~${p10.toFixed(1)} µg/m³, seuil > ${PM10_POLLUTED_GT}).`,
+          title: ai.pm10Title,
+          text: ai.pm10PollutedText(name, p10.toFixed(1), PM10_POLLUTED_GT),
           tone: 'blue',
         });
       } else if (p10 >= PM10_GOOD_LT) {
         messages.push({
-          title: 'Particules PM10',
-          text: `${name}: PM10 modéré (~${p10.toFixed(1)} µg/m³). Seuil « air bon » : < ${PM10_GOOD_LT}.`,
+          title: ai.pm10Title,
+          text: ai.pm10ModerateText(name, p10.toFixed(1), PM10_GOOD_LT),
           tone: 'blue',
         });
       } else {
         messages.push({
-          title: 'Particules PM10',
-          text: `${name}: air bon (PM10 ~${p10.toFixed(1)} µg/m³ < ${PM10_GOOD_LT}).`,
+          title: ai.pm10Title,
+          text: ai.pm10GoodText(name, p10.toFixed(1), PM10_GOOD_LT),
           tone: 'blue',
         });
       }
     }
 
     if (latest.temperature != null) {
-      if (latest.temperature > t.tempHigh) {
+      if (latest.temperature > thr.tempHigh) {
         messages.push({
-          title: 'Cooling Optimization',
-          text: `${name}: Temperature at ${latest.temperature.toFixed(1)}°C. Targeting ~${t.tempHigh.toFixed(1)}°C for better comfort/energy balance.`,
+          title: ai.coolingTitle,
+          text: ai.coolingText(name, latest.temperature.toFixed(1), thr.tempHigh.toFixed(1)),
           tone: 'purple',
         });
-      } else if (latest.temperature < t.tempLow) {
+      } else if (latest.temperature < thr.tempLow) {
         messages.push({
-          title: 'Heating Optimization',
-          text: `${name}: Temperature at ${latest.temperature.toFixed(1)}°C. Slightly increasing HVAC output for comfort.`,
+          title: ai.heatingTitle,
+          text: ai.heatingText(name, latest.temperature.toFixed(1)),
           tone: 'purple',
         });
       } else {
         messages.push({
-          title: 'Température',
-          text: `${name}: zone idéale 20–24 °C (${latest.temperature.toFixed(1)}°C).`,
+          title: ai.temperatureTitle,
+          text: ai.temperatureIdealText(name, latest.temperature.toFixed(1)),
           tone: 'purple',
         });
       }
     }
 
     if (latest.light != null) {
-      if (latest.light > t.lightHigh) {
+      if (latest.light > thr.lightHigh) {
         messages.push({
-          title: 'Luminosité',
-          text: `${name}: ${Math.round(latest.light)} lux — au-dessus de la zone idéale 300–500 lux.`,
+          title: ai.brightnessTitle,
+          text: ai.brightnessHighText(name, Math.round(latest.light)),
           tone: 'green',
         });
-      } else if (latest.light < t.lightLow) {
+      } else if (latest.light < thr.lightLow) {
         messages.push({
-          title: 'Luminosité',
-          text: `${name}: ${Math.round(latest.light)} lux — en dessous de la zone idéale 300–500 lux.`,
+          title: ai.brightnessTitle,
+          text: ai.brightnessLowText(name, Math.round(latest.light)),
           tone: 'green',
         });
       } else {
         messages.push({
-          title: 'Luminosité',
-          text: `${name}: zone idéale 300–500 lux (${Math.round(latest.light)} lux).`,
+          title: ai.brightnessTitle,
+          text: ai.brightnessIdealText(name, Math.round(latest.light)),
           tone: 'green',
         });
       }
@@ -316,14 +334,14 @@ export default function RoomDetails({ roomId, onBack, isAdmin = false }: RoomDet
 
     if (messages.length === 0) {
       messages.push({
-        title: 'Sensor data',
-        text: `${name}: Latest record has no numeric values for the assistant yet (e.g. light-only history).`,
+        title: ai.sensorDataTitle,
+        text: ai.sensorDataText(name),
         tone: 'blue',
       });
     }
 
     return messages.slice(0, 3);
-  }, [latest, roomMeta.name, aiAggressiveness]);
+  }, [latest, roomMeta.name, aiAggressiveness, lang]);
 
   const statusChips = useMemo(() => {
     if (!latest) return null;
@@ -355,12 +373,18 @@ export default function RoomDetails({ roomId, onBack, isAdmin = false }: RoomDet
               <div className="flex items-center space-x-2">
                 <div className={`w-2 h-2 rounded-full shrink-0 ${roomMeta.status === 'occupied' ? 'bg-blue-500' : 'bg-emerald-500'}`}></div>
                 <span className="text-sm text-gray-600 capitalize">
-                  {roomMeta.status === 'occupied' ? 'Occupée' : 'Disponible'}
+                  {roomMeta.status === 'occupied' ? t.occupied : t.available}
                 </span>
               </div>
               <div className="px-3 py-1 bg-emerald-50 text-emerald-600 rounded-full text-sm font-medium border border-emerald-200">
-                Confort : {displayComfortScore ?? 0}%
+                {t.comfort} : {displayComfortScore ?? 0}%
               </div>
+              {roomMeta.lastMotionAt && (
+                <div className="flex items-center gap-1 px-2 py-1 bg-gray-50 text-gray-500 rounded-full text-xs border border-gray-200">
+                  <Eye className="w-3 h-3 shrink-0" />
+                  <span>{t.lastMotion} : {formatTimeSince(roomMeta.lastMotionAt)}</span>
+                </div>
+              )}
             </div>
           </div>
         </div>
@@ -373,8 +397,8 @@ export default function RoomDetails({ roomId, onBack, isAdmin = false }: RoomDet
             <Brain className="w-6 h-6" />
           </div>
           <div className="flex-1">
-            <p className="font-medium">AI is actively optimizing this room</p>
-            <p className="text-sm text-white/80">Adjusting air quality and temperature for maximum comfort</p>
+            <p className="font-medium">{t.aiOptimizingRoom}</p>
+            <p className="text-sm text-white/80">{t.aiAdjusting}</p>
           </div>
           <div className="w-2 h-2 bg-white rounded-full animate-pulse"></div>
         </div>
@@ -382,7 +406,7 @@ export default function RoomDetails({ roomId, onBack, isAdmin = false }: RoomDet
 
       {/* Live Sensor Metrics */}
       <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3 sm:gap-4">
-        {/* Temperature — dernière mesure horodatée */}
+        {/* Temperature */}
         <div className="bg-white rounded-2xl p-6 shadow-lg border border-gray-100">
           <div className="flex items-center justify-between mb-4">
             <div className="w-12 h-12 bg-gradient-to-br from-orange-100 to-orange-200 rounded-xl flex items-center justify-center">
@@ -390,7 +414,7 @@ export default function RoomDetails({ roomId, onBack, isAdmin = false }: RoomDet
             </div>
             {statusChips?.temperature != null ? (
               <span className={`px-2 py-1 text-xs font-medium rounded-lg ${comfortChipToneClass(statusChips.temperature)}`}>
-                {statusChips.temperature.label}
+                {translateChipLabel(statusChips.temperature.label, lang)}
               </span>
             ) : (
               <span className="px-2 py-1 bg-gray-100 text-gray-500 text-xs font-medium rounded-lg">--</span>
@@ -399,7 +423,7 @@ export default function RoomDetails({ roomId, onBack, isAdmin = false }: RoomDet
           <div className="text-3xl font-bold text-gray-900 mb-1 tabular-nums">
             {latest?.temperature != null ? `${latest.temperature.toFixed(1)}°C` : '--'}
           </div>
-          <div className="text-sm text-gray-500">Temperature</div>
+          <div className="text-sm text-gray-500">{t.temperature}</div>
         </div>
 
         {/* Humidity */}
@@ -410,7 +434,7 @@ export default function RoomDetails({ roomId, onBack, isAdmin = false }: RoomDet
             </div>
             {statusChips?.humidity != null ? (
               <span className={`px-2 py-1 text-xs font-medium rounded-lg ${comfortChipToneClass(statusChips.humidity)}`}>
-                {statusChips.humidity.label}
+                {translateChipLabel(statusChips.humidity.label, lang)}
               </span>
             ) : (
               <span className="px-2 py-1 bg-gray-100 text-gray-500 text-xs font-medium rounded-lg">--</span>
@@ -419,7 +443,7 @@ export default function RoomDetails({ roomId, onBack, isAdmin = false }: RoomDet
           <div className="text-3xl font-bold text-gray-900 mb-1 tabular-nums">
             {latest?.humidity != null ? `${Math.round(latest.humidity)}%` : '--'}
           </div>
-          <div className="text-sm text-gray-500">Humidity</div>
+          <div className="text-sm text-gray-500">{t.humidity}</div>
         </div>
 
         {/* CO2 */}
@@ -430,7 +454,7 @@ export default function RoomDetails({ roomId, onBack, isAdmin = false }: RoomDet
             </div>
             {statusChips?.co2 != null ? (
               <span className={`px-2 py-1 text-xs font-medium rounded-lg ${comfortChipToneClass(statusChips.co2)}`}>
-                {statusChips.co2.label}
+                {translateChipLabel(statusChips.co2.label, lang)}
               </span>
             ) : (
               <span className="px-2 py-1 bg-gray-100 text-gray-500 text-xs font-medium rounded-lg">--</span>
@@ -439,7 +463,7 @@ export default function RoomDetails({ roomId, onBack, isAdmin = false }: RoomDet
           <div className="text-3xl font-bold text-gray-900 mb-1 tabular-nums">
             {latest?.co2 != null ? Math.round(latest.co2) : '--'}
           </div>
-          <div className="text-sm text-gray-500">CO₂ (ppm)</div>
+          <div className="text-sm text-gray-500">{t.co2}</div>
         </div>
 
         {/* Noise */}
@@ -450,7 +474,7 @@ export default function RoomDetails({ roomId, onBack, isAdmin = false }: RoomDet
             </div>
             {statusChips?.noise != null ? (
               <span className={`px-2 py-1 text-xs font-medium rounded-lg ${comfortChipToneClass(statusChips.noise)}`}>
-                {statusChips.noise.label}
+                {translateChipLabel(statusChips.noise.label, lang)}
               </span>
             ) : (
               <span className="px-2 py-1 bg-gray-100 text-gray-500 text-xs font-medium rounded-lg">--</span>
@@ -459,7 +483,7 @@ export default function RoomDetails({ roomId, onBack, isAdmin = false }: RoomDet
           <div className="text-3xl font-bold text-gray-900 mb-1 tabular-nums">
             {latest?.noise != null ? Math.round(latest.noise) : '--'}
           </div>
-          <div className="text-sm text-gray-500">Noise (dB)</div>
+          <div className="text-sm text-gray-500">{t.noise}</div>
         </div>
 
         {/* Light */}
@@ -470,7 +494,7 @@ export default function RoomDetails({ roomId, onBack, isAdmin = false }: RoomDet
             </div>
             {statusChips?.light != null ? (
               <span className={`px-2 py-1 text-xs font-medium rounded-lg ${comfortChipToneClass(statusChips.light)}`}>
-                {statusChips.light.label}
+                {translateChipLabel(statusChips.light.label, lang)}
               </span>
             ) : (
               <span className="px-2 py-1 bg-gray-100 text-gray-500 text-xs font-medium rounded-lg">--</span>
@@ -479,11 +503,25 @@ export default function RoomDetails({ roomId, onBack, isAdmin = false }: RoomDet
           <div className="text-3xl font-bold text-gray-900 mb-1 tabular-nums">
             {latest?.light != null ? Math.round(latest.light) : '--'}
           </div>
-          <div className="text-sm text-gray-500">Light (lux)</div>
-          {isAdmin && numericRoomId ? (
+          <div className="flex items-center justify-between">
+            <div className="text-sm text-gray-500">{t.light}</div>
+            {isAdmin && numericRoomId ? (
+              <button
+                onClick={() => setShowLightControl((v) => !v)}
+                className="flex items-center gap-1 text-xs text-amber-600 hover:text-amber-700 transition"
+                aria-expanded={showLightControl}
+              >
+                {showLightControl
+                  ? <><EyeOff className="w-3 h-3" /> {t.hideLightControl}</>
+                  : <><Eye className="w-3 h-3" /> {t.showLightControl}</>
+                }
+              </button>
+            ) : null}
+          </div>
+          {isAdmin && numericRoomId && showLightControl ? (
             <div className="mt-4 pt-4 border-t border-gray-100">
               <label htmlFor="room-light-lux" className="block text-xs font-medium text-gray-500 mb-2">
-                Cible {LUX_MIN}–{LUX_MAX} lux (cette salle)
+                {t.lightSliderLabel(LUX_MIN, LUX_MAX)}
               </label>
               <input
                 id="room-light-lux"
@@ -522,7 +560,7 @@ export default function RoomDetails({ roomId, onBack, isAdmin = false }: RoomDet
             </div>
             {statusChips?.pm25 != null ? (
               <span className={`px-2 py-1 text-xs font-medium rounded-lg ${comfortChipToneClass(statusChips.pm25)}`}>
-                {statusChips.pm25.label}
+                {translateChipLabel(statusChips.pm25.label, lang)}
               </span>
             ) : (
               <span className="px-2 py-1 bg-gray-100 text-gray-500 text-xs font-medium rounded-lg">--</span>
@@ -541,7 +579,7 @@ export default function RoomDetails({ roomId, onBack, isAdmin = false }: RoomDet
             </div>
             {statusChips?.pm10 != null ? (
               <span className={`px-2 py-1 text-xs font-medium rounded-lg ${comfortChipToneClass(statusChips.pm10)}`}>
-                {statusChips.pm10.label}
+                {translateChipLabel(statusChips.pm10.label, lang)}
               </span>
             ) : (
               <span className="px-2 py-1 bg-gray-100 text-gray-500 text-xs font-medium rounded-lg">--</span>
@@ -556,16 +594,16 @@ export default function RoomDetails({ roomId, onBack, isAdmin = false }: RoomDet
 
       {/* Loading / Error */}
       {loading && (
-        <div className="text-center py-8 text-gray-500">Loading measurements…</div>
+        <div className="text-center py-8 text-gray-500">{t.loadingMeasurements}</div>
       )}
       {error && (
         <div className="rounded-xl bg-amber-50 border border-amber-200 text-amber-800 px-4 py-2 text-sm">{error}</div>
       )}
 
-      {/* Historique mesures (affichage ici uniquement) */}
+      {/* Charts */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         <div className="bg-white rounded-2xl p-6 shadow-lg border border-gray-100">
-          <h3 className="font-semibold text-gray-900 mb-4">Temperature (24h)</h3>
+          <h3 className="font-semibold text-gray-900 mb-4">{t.temperatureChart}</h3>
           {hasChartData ? (
             <ResponsiveContainer width="100%" height={200}>
               <LineChart data={chartData}>
@@ -582,7 +620,7 @@ export default function RoomDetails({ roomId, onBack, isAdmin = false }: RoomDet
         </div>
 
         <div className="bg-white rounded-2xl p-6 shadow-lg border border-gray-100">
-          <h3 className="font-semibold text-gray-900 mb-4">CO₂ Level (24h)</h3>
+          <h3 className="font-semibold text-gray-900 mb-4">{t.co2Chart}</h3>
           {hasChartData ? (
             <ResponsiveContainer width="100%" height={200}>
               <LineChart data={chartData}>
@@ -599,7 +637,7 @@ export default function RoomDetails({ roomId, onBack, isAdmin = false }: RoomDet
         </div>
 
         <div className="bg-white rounded-2xl p-6 shadow-lg border border-gray-100">
-          <h3 className="font-semibold text-gray-900 mb-4">Noise Level (24h)</h3>
+          <h3 className="font-semibold text-gray-900 mb-4">{t.noiseChart}</h3>
           {hasChartData ? (
             <ResponsiveContainer width="100%" height={200}>
               <LineChart data={chartData}>
@@ -616,7 +654,7 @@ export default function RoomDetails({ roomId, onBack, isAdmin = false }: RoomDet
         </div>
 
         <div className="bg-white rounded-2xl p-6 shadow-lg border border-gray-100">
-          <h3 className="font-semibold text-gray-900 mb-4">Light Intensity (24h)</h3>
+          <h3 className="font-semibold text-gray-900 mb-4">{t.lightChart}</h3>
           {hasChartData ? (
             <ResponsiveContainer width="100%" height={200}>
               <LineChart data={chartData}>
@@ -633,7 +671,7 @@ export default function RoomDetails({ roomId, onBack, isAdmin = false }: RoomDet
         </div>
 
         <div className="bg-white rounded-2xl p-6 shadow-lg border border-gray-100">
-          <h3 className="font-semibold text-gray-900 mb-4">PM2.5 (24h)</h3>
+          <h3 className="font-semibold text-gray-900 mb-4">{t.pm25Chart}</h3>
           {hasChartData ? (
             <ResponsiveContainer width="100%" height={200}>
               <LineChart data={chartData}>
@@ -650,11 +688,11 @@ export default function RoomDetails({ roomId, onBack, isAdmin = false }: RoomDet
         </div>
       </div>
 
-      {/* AI Assistant centered */}
+      {/* AI Assistant */}
       <div className="flex justify-center">
         <div className="glass-panel rounded-2xl p-6 border border-white/10 relative overflow-hidden max-w-xl w-full">
           <div className="absolute top-0 right-0 w-64 h-64 bg-purple-500/10 rounded-full blur-3xl"></div>
-          
+
           <div className="flex items-center gap-3 mb-4">
             <div className="w-10 h-10 rounded-full ai-thinking flex items-center justify-center">
               <svg className="w-6 h-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -662,8 +700,8 @@ export default function RoomDetails({ roomId, onBack, isAdmin = false }: RoomDet
               </svg>
             </div>
             <div>
-              <h3 className="text-lg font-semibold">AI Assistant</h3>
-              <p className="text-xs text-gray-400">Real-time optimization</p>
+              <h3 className="text-lg font-semibold">{t.aiAssistant}</h3>
+              <p className="text-xs text-gray-400">{t.realtimeOptimization}</p>
             </div>
           </div>
 
@@ -708,7 +746,7 @@ export default function RoomDetails({ roomId, onBack, isAdmin = false }: RoomDet
 
           <div className="mt-4 pt-4 border-t border-white/10 flex items-center gap-2 text-xs text-gray-500">
             <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse shrink-0" />
-            <span>Données en temps réel · mise à jour à chaque mesure capteur</span>
+            <span>{t.realtimeData}</span>
           </div>
         </div>
       </div>

@@ -22,20 +22,22 @@ import {
   type DeviceRecord,
   type RoomListRow,
 } from '../services/firestoreApi';
+import { useLang } from '../i18n/LanguageContext';
+import { translateChipLabel, type Lang } from '../i18n/translations';
 
 interface RoomsManagementProps {
   onRoomSelect: (roomId: string) => void;
   isAdmin?: boolean;
 }
 
-function comfortPill(value: number | null, statusFn: (v: number) => ComfortStatusChip) {
+function comfortPill(value: number | null, statusFn: (v: number) => ComfortStatusChip, lang: Lang) {
   if (value == null) return null;
   const s = statusFn(value);
   return (
     <span
       className={`mt-0.5 inline-block w-max max-w-full px-1.5 py-0.5 rounded-md text-[10px] font-medium leading-tight ${comfortChipToneClass(s)}`}
     >
-      {s.label}
+      {translateChipLabel(s.label, lang)}
     </span>
   );
 }
@@ -47,6 +49,7 @@ const defaultAddForm = () => ({
 });
 
 export default function RoomsManagement({ onRoomSelect, isAdmin = false }: RoomsManagementProps) {
+  const { t, lang } = useLang();
   const [rooms, setRooms] = useState<RoomListRow[]>([]);
   const [searchQuery, setSearchQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState<'all' | 'available' | 'busy'>('all');
@@ -177,21 +180,15 @@ export default function RoomsManagement({ onRoomSelect, isAdmin = false }: Rooms
   };
 
   const getStatusColor = (status: string) => {
-    return status === 'busy'
-      ? 'bg-blue-500'
-      : 'bg-emerald-500';
+    return status === 'busy' ? 'bg-blue-500' : 'bg-emerald-500';
   };
 
   const validateAddForm = () => {
     const err: Record<string, string> = {};
     const name = addForm.name.trim();
-    if (!name) err.name = 'Nom requis.';
-
+    if (!name) err.name = t.rooms.validateNameRequired;
     const capacity = parseInt(addForm.capacity, 10);
-    if (Number.isNaN(capacity) || capacity < 1) {
-      err.capacity = 'Capacité ≥ 1 requise.';
-    }
-
+    if (Number.isNaN(capacity) || capacity < 1) err.capacity = t.rooms.validateCapacityRequired;
     setAddFormErrors(err);
     return Object.keys(err).length === 0;
   };
@@ -199,13 +196,9 @@ export default function RoomsManagement({ onRoomSelect, isAdmin = false }: Rooms
   const validateEditForm = () => {
     const err: Record<string, string> = {};
     const name = editForm.name.trim();
-    if (!name) err.name = 'Nom requis.';
-
+    if (!name) err.name = t.rooms.validateNameRequired;
     const capacity = parseInt(editForm.capacity, 10);
-    if (Number.isNaN(capacity) || capacity < 1) {
-      err.capacity = 'Capacité ≥ 1 requise.';
-    }
-
+    if (Number.isNaN(capacity) || capacity < 1) err.capacity = t.rooms.validateCapacityRequired;
     setEditFormErrors(err);
     return Object.keys(err).length === 0;
   };
@@ -214,10 +207,8 @@ export default function RoomsManagement({ onRoomSelect, isAdmin = false }: Rooms
     e.preventDefault();
     if (!isAdmin) return;
     if (!validateAddForm()) return;
-
     const capacity = parseInt(addForm.capacity, 10);
     const linkedId = addForm.linkedDeviceId.trim();
-
     setAddRoomSubmitting(true);
     try {
       await createRoom({
@@ -229,14 +220,14 @@ export default function RoomsManagement({ onRoomSelect, isAdmin = false }: Rooms
       const linked = linkedId ? iotDevicesPicker.find((d) => d.id === linkedId) : undefined;
       setRoomActionMessage(
         linked
-          ? `Salle créée. L’appareil « ${linked.name} » est maintenant associé à cette salle.`
-          : 'Salle ajoutée.',
+          ? t.rooms.toastRoomAddedWithDevice(linked.name)
+          : t.rooms.toastRoomAdded,
       );
       setShowAddRoomForm(false);
       setAddForm(defaultAddForm());
       setAddFormErrors({});
     } catch (error) {
-      setRoomActionMessage(`Échec : ${error}`);
+      setRoomActionMessage(t.rooms.toastError(String(error)));
     } finally {
       setAddRoomSubmitting(false);
     }
@@ -246,10 +237,8 @@ export default function RoomsManagement({ onRoomSelect, isAdmin = false }: Rooms
     e.preventDefault();
     if (!isAdmin || !editRoomId) return;
     if (!validateEditForm()) return;
-
     const capacity = parseInt(editForm.capacity, 10);
     const linkedId = editForm.linkedDeviceId.trim();
-
     setEditRoomSubmitting(true);
     try {
       await updateRoom(editRoomId, {
@@ -260,32 +249,27 @@ export default function RoomsManagement({ onRoomSelect, isAdmin = false }: Rooms
       const linked = linkedId ? iotDevicesPicker.find((d) => d.id === linkedId) : undefined;
       setRoomActionMessage(
         linked
-          ? `Salle mise à jour. L’appareil « ${linked.name} » est associé à cette salle.`
-          : 'Salle mise à jour.',
+          ? t.rooms.toastRoomUpdatedWithDevice(linked.name)
+          : t.rooms.toastRoomUpdated,
       );
       setEditRoomId(null);
       setEditForm(defaultAddForm());
       setEditFormErrors({});
     } catch (error) {
-      setRoomActionMessage(`Échec : ${error instanceof Error ? error.message : String(error)}`);
+      setRoomActionMessage(t.rooms.toastDeleteError(error instanceof Error ? error.message : String(error)));
     } finally {
       setEditRoomSubmitting(false);
     }
   };
 
   const handleDeleteRoom = async (room: RoomListRow) => {
-    const ok = window.confirm(
-      `Supprimer la salle « ${room.name} » ?\n\nCette action est irréversible. Cliquez sur OK pour supprimer, ou Annuler pour ne rien faire.`,
-    );
-    if (!ok) {
-      return;
-    }
-
+    const ok = window.confirm(t.rooms.confirmDelete(room.name));
+    if (!ok) return;
     try {
       await deleteRoom(String(room.id));
-      setRoomActionMessage(`La salle « ${room.name} » a été supprimée.`);
+      setRoomActionMessage(t.rooms.toastRoomDeleted(room.name));
     } catch (error) {
-      setRoomActionMessage(`Échec de la suppression : ${error}`);
+      setRoomActionMessage(t.rooms.toastDeleteError(String(error)));
     }
   };
 
@@ -294,11 +278,11 @@ export default function RoomsManagement({ onRoomSelect, isAdmin = false }: Rooms
       {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
         <div>
-          <h2 className="text-2xl font-bold text-gray-900">Meeting Rooms</h2>
-          <p className="text-sm text-gray-500">Manage and monitor all meeting rooms</p>
+          <h2 className="text-2xl font-bold text-gray-900">{t.rooms.title}</h2>
+          <p className="text-sm text-gray-500">{t.rooms.subtitle}</p>
         </div>
         <div className="flex items-center space-x-3">
-          <span className="text-sm text-gray-600">{filteredRooms.length} rooms</span>
+          <span className="text-sm text-gray-600">{t.rooms.roomCount(filteredRooms.length)}</span>
           {isAdmin && (
             <button
               type="button"
@@ -321,7 +305,7 @@ export default function RoomsManagement({ onRoomSelect, isAdmin = false }: Rooms
               }`}
             >
               <Plus className="w-4 h-4 mr-2" />
-              {showAddRoomForm ? 'Fermer' : 'Add Room'}
+              {showAddRoomForm ? t.rooms.closeFormButton : t.rooms.addRoom}
             </button>
           )}
         </div>
@@ -336,7 +320,7 @@ export default function RoomsManagement({ onRoomSelect, isAdmin = false }: Rooms
         >
           <div className="flex items-center justify-between border-b border-gray-100 px-6 py-4 rounded-t-2xl bg-emerald-50">
             <h3 id="add-room-title" className="text-lg font-semibold text-gray-900">
-              Nouvelle salle
+              {t.rooms.newRoomTitle}
             </h3>
             <button
               type="button"
@@ -347,7 +331,7 @@ export default function RoomsManagement({ onRoomSelect, isAdmin = false }: Rooms
                 setAddFormErrors({});
               }}
               className="text-gray-500 hover:text-gray-700 text-xl leading-none px-2 disabled:opacity-50"
-              aria-label="Fermer le formulaire"
+              aria-label={t.rooms.closeFormAriaLabel}
             >
               ×
             </button>
@@ -356,7 +340,7 @@ export default function RoomsManagement({ onRoomSelect, isAdmin = false }: Rooms
           <form onSubmit={handleSubmitAddRoom} className="px-6 py-4 space-y-4">
             <div>
               <label htmlFor="room-name" className="block text-sm font-medium text-gray-700 mb-1">
-                Nom de la salle <span className="text-red-500">*</span>
+                {t.rooms.fieldRoomName} <span className="text-red-500">*</span>
               </label>
               <input
                 id="room-name"
@@ -371,7 +355,7 @@ export default function RoomsManagement({ onRoomSelect, isAdmin = false }: Rooms
 
             <div>
               <label htmlFor="room-capacity" className="block text-sm font-medium text-gray-700 mb-1">
-                Capacité (places) <span className="text-red-500">*</span>
+                {t.rooms.fieldCapacity} <span className="text-red-500">*</span>
               </label>
               <input
                 id="room-capacity"
@@ -388,29 +372,24 @@ export default function RoomsManagement({ onRoomSelect, isAdmin = false }: Rooms
 
             <div className="pt-2 border-t border-gray-100">
               <label htmlFor="room-linked-device" className="block text-sm font-medium text-gray-900 mb-1">
-                Appareil IoT (optionnel)
+                {t.rooms.fieldIotDevice}
               </label>
-              <p className="text-xs text-gray-500 mb-2">
-                Choisissez un appareil déjà enregistré (Admin → IoT Devices). Il sera rattaché à cette nouvelle salle
-                (remplace l’association précédente).
-              </p>
+              <p className="text-xs text-gray-500 mb-2">{t.rooms.iotDeviceHint}</p>
               <select
                 id="room-linked-device"
                 value={addForm.linkedDeviceId}
                 onChange={(e) => setAddForm((f) => ({ ...f, linkedDeviceId: e.target.value }))}
                 className="w-full px-3 py-2 border border-gray-300 rounded-xl focus:ring-2 focus:ring-emerald-500 outline-none bg-white"
               >
-                <option value="">— Aucun appareil —</option>
+                <option value="">{t.rooms.noDevice}</option>
                 {iotDevicesPicker.map((d) => (
                   <option key={d.id} value={d.id}>
-                    {d.ipAddress ?? d.name} · Salle : {d.room}
+                    {d.ipAddress ?? d.name} · {t.alerts.roomLabel} {d.room}
                   </option>
                 ))}
               </select>
               {iotPickerLoaded && iotDevicesPicker.length === 0 && (
-                <p className="mt-2 text-xs text-amber-700">
-                  Aucun appareil dans Firestore. Ajoutez-en dans Paramètres → IoT Devices Management.
-                </p>
+                <p className="mt-2 text-xs text-amber-700">{t.rooms.noDevicesInFirestore}</p>
               )}
             </div>
 
@@ -425,14 +404,14 @@ export default function RoomsManagement({ onRoomSelect, isAdmin = false }: Rooms
                 }}
                 className="px-4 py-2 rounded-xl border border-gray-300 text-gray-700 font-medium hover:bg-gray-50 disabled:opacity-50"
               >
-                Annuler
+                {t.rooms.cancel}
               </button>
               <button
                 type="submit"
                 disabled={addRoomSubmitting}
                 className="px-4 py-2 rounded-xl bg-emerald-500 text-white font-medium shadow-sm hover:bg-emerald-600 disabled:opacity-50"
               >
-                {addRoomSubmitting ? 'Enregistrement…' : 'Créer la salle'}
+                {addRoomSubmitting ? t.rooms.saving : t.rooms.createRoom}
               </button>
             </div>
           </form>
@@ -448,7 +427,7 @@ export default function RoomsManagement({ onRoomSelect, isAdmin = false }: Rooms
         >
           <div className="flex items-center justify-between border-b border-gray-100 px-6 py-4 rounded-t-2xl bg-blue-50">
             <h3 id="edit-room-title" className="text-lg font-semibold text-gray-900">
-              Modifier la salle
+              {t.rooms.editRoomTitle}
             </h3>
             <button
               type="button"
@@ -459,20 +438,17 @@ export default function RoomsManagement({ onRoomSelect, isAdmin = false }: Rooms
                 setEditFormErrors({});
               }}
               className="text-gray-500 hover:text-gray-700 text-xl leading-none px-2 disabled:opacity-50"
-              aria-label="Fermer le formulaire"
+              aria-label={t.rooms.closeFormAriaLabel}
             >
               ×
             </button>
           </div>
 
           <form onSubmit={handleSubmitEditRoom} className="px-6 py-4 space-y-4">
-            <p className="text-sm text-gray-600">
-              L’occupation (libre / occupée) est mise à jour automatiquement par le capteur de mouvement sur l’appareil. Vous
-              pouvez modifier le nom, la capacité et l’appareil lié.
-            </p>
+            <p className="text-sm text-gray-600">{t.rooms.editHint}</p>
             <div>
               <label htmlFor="edit-room-name" className="block text-sm font-medium text-gray-700 mb-1">
-                Nom de la salle <span className="text-red-500">*</span>
+                {t.rooms.fieldRoomName} <span className="text-red-500">*</span>
               </label>
               <input
                 id="edit-room-name"
@@ -487,7 +463,7 @@ export default function RoomsManagement({ onRoomSelect, isAdmin = false }: Rooms
 
             <div>
               <label htmlFor="edit-room-capacity" className="block text-sm font-medium text-gray-700 mb-1">
-                Capacité (places) <span className="text-red-500">*</span>
+                {t.rooms.fieldCapacity} <span className="text-red-500">*</span>
               </label>
               <input
                 id="edit-room-capacity"
@@ -504,10 +480,10 @@ export default function RoomsManagement({ onRoomSelect, isAdmin = false }: Rooms
 
             <div className="pt-2 border-t border-gray-100">
               <label htmlFor="edit-room-linked-device" className="block text-sm font-medium text-gray-900 mb-1">
-                Appareil IoT (optionnel)
+                {t.rooms.fieldIotDevice}
               </label>
               <p className="text-xs text-gray-500 mb-2">
-                {editLinkedLoading ? 'Chargement de l’association actuelle…' : 'Choisissez un appareil ou aucun.'}
+                {editLinkedLoading ? t.rooms.iotEditLoading : t.rooms.iotEditHint}
               </p>
               <select
                 id="edit-room-linked-device"
@@ -516,17 +492,15 @@ export default function RoomsManagement({ onRoomSelect, isAdmin = false }: Rooms
                 onChange={(e) => setEditForm((f) => ({ ...f, linkedDeviceId: e.target.value }))}
                 className="w-full px-3 py-2 border border-gray-300 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none bg-white disabled:opacity-60"
               >
-                <option value="">— Aucun appareil —</option>
+                <option value="">{t.rooms.noDevice}</option>
                 {iotDevicesPicker.map((d) => (
                   <option key={d.id} value={d.id}>
-                    {d.ipAddress ?? d.name} · Salle : {d.room}
+                    {d.ipAddress ?? d.name} · {t.alerts.roomLabel} {d.room}
                   </option>
                 ))}
               </select>
               {iotPickerLoaded && iotDevicesPicker.length === 0 && (
-                <p className="mt-2 text-xs text-amber-700">
-                  Aucun appareil dans Firestore. Ajoutez-en dans Paramètres → IoT Devices Management.
-                </p>
+                <p className="mt-2 text-xs text-amber-700">{t.rooms.noDevicesInFirestore}</p>
               )}
             </div>
 
@@ -541,14 +515,14 @@ export default function RoomsManagement({ onRoomSelect, isAdmin = false }: Rooms
                 }}
                 className="px-4 py-2 rounded-xl border border-gray-300 text-gray-700 font-medium hover:bg-gray-50 disabled:opacity-50"
               >
-                Annuler
+                {t.rooms.cancel}
               </button>
               <button
                 type="submit"
                 disabled={editRoomSubmitting || editLinkedLoading}
                 className="px-4 py-2 rounded-xl bg-emerald-500 text-white font-medium shadow-sm hover:bg-emerald-600 disabled:opacity-50"
               >
-                {editRoomSubmitting ? 'Enregistrement…' : 'Enregistrer les modifications'}
+                {editRoomSubmitting ? t.rooms.saving : t.rooms.saveChanges}
               </button>
             </div>
           </form>
@@ -564,29 +538,26 @@ export default function RoomsManagement({ onRoomSelect, isAdmin = false }: Rooms
       {/* Filters */}
       <div className="bg-white rounded-2xl p-4 shadow-lg border border-gray-100">
         <div className="flex flex-col sm:flex-row gap-4">
-          {/* Search */}
           <div className="flex-1 relative">
             <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 w-5 h-5 text-gray-400" />
             <input
               type="text"
-              placeholder="Search rooms..."
+              placeholder={t.rooms.searchPlaceholder}
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
               className="w-full pl-10 pr-4 py-2.5 border border-gray-300 rounded-xl focus:ring-2 focus:ring-emerald-500 focus:border-transparent outline-none"
             />
           </div>
-
-          {/* Status Filter */}
           <div className="flex items-center space-x-2">
             <Filter className="w-5 h-5 text-gray-500" />
             <select
               value={statusFilter}
-              onChange={(e) => setStatusFilter(e.target.value as any)}
+              onChange={(e) => setStatusFilter(e.target.value as 'all' | 'available' | 'busy')}
               className="px-4 py-2.5 border border-gray-300 rounded-xl focus:ring-2 focus:ring-emerald-500 focus:border-transparent outline-none"
             >
-              <option value="all">All Status</option>
-              <option value="available">Available</option>
-              <option value="busy">Occupied</option>
+              <option value="all">{t.rooms.filterAll}</option>
+              <option value="available">{t.rooms.filterAvailable}</option>
+              <option value="busy">{t.rooms.filterOccupied}</option>
             </select>
           </div>
         </div>
@@ -605,21 +576,21 @@ export default function RoomsManagement({ onRoomSelect, isAdmin = false }: Rooms
               <div className="flex items-start justify-between mb-4">
                 <div className="flex-1">
                   <h3 className="font-semibold text-gray-900 mb-1">{room.name}</h3>
-                  <p className="text-sm text-gray-500">Capacity: {room.capacity}</p>
+                  <p className="text-sm text-gray-500">{t.rooms.capacity(room.capacity)}</p>
                 </div>
                 <div className={`px-3 py-1 rounded-full text-xs font-medium border ${getComfortColor(room.comfortScore)}`}>
                   {room.comfortScore}%
                 </div>
               </div>
-
-              {/* Status Badge */}
               <div className="flex items-center space-x-2">
                 <div className={`w-2 h-2 rounded-full ${getStatusColor(room.status)}`}></div>
-                <span className="text-sm font-medium text-gray-700 capitalize">{room.status === 'busy' ? 'occupied' : room.status}</span>
+                <span className="text-sm font-medium text-gray-700 capitalize">
+                  {room.status === 'busy' ? t.rooms.statusOccupied : t.rooms.statusAvailable}
+                </span>
               </div>
             </div>
 
-            {/* Capteurs : dernière mesure (date/heure) ; pas de donnée → -- */}
+            {/* Sensors */}
             <div className="p-6 bg-gray-50 flex-1">
               <div className="grid grid-cols-2 gap-4">
                 <div className="flex items-center space-x-2">
@@ -627,11 +598,11 @@ export default function RoomsManagement({ onRoomSelect, isAdmin = false }: Rooms
                     <Thermometer className="w-4 h-4 text-orange-600" />
                   </div>
                   <div>
-                    <p className="text-xs text-gray-500">Temp</p>
+                    <p className="text-xs text-gray-500">{t.rooms.sensorTemp}</p>
                     <p className="text-sm font-medium text-gray-900 tabular-nums">
                       {room.temperature != null ? `${room.temperature.toFixed(1)}°C` : '--'}
                     </p>
-                    {comfortPill(room.temperature, statusTemperature)}
+                    {comfortPill(room.temperature, statusTemperature, lang)}
                   </div>
                 </div>
                 <div className="flex items-center space-x-2">
@@ -639,11 +610,11 @@ export default function RoomsManagement({ onRoomSelect, isAdmin = false }: Rooms
                     <Droplets className="w-4 h-4 text-cyan-600" />
                   </div>
                   <div>
-                    <p className="text-xs text-gray-500">Humidity</p>
+                    <p className="text-xs text-gray-500">{t.rooms.sensorHumidity}</p>
                     <p className="text-sm font-medium text-gray-900 tabular-nums">
                       {room.humidity != null ? `${Math.round(room.humidity)}%` : '--'}
                     </p>
-                    {comfortPill(room.humidity, statusHumidityPct)}
+                    {comfortPill(room.humidity, statusHumidityPct, lang)}
                   </div>
                 </div>
                 <div className="flex items-center space-x-2">
@@ -651,11 +622,11 @@ export default function RoomsManagement({ onRoomSelect, isAdmin = false }: Rooms
                     <Wind className="w-4 h-4 text-blue-600" />
                   </div>
                   <div>
-                    <p className="text-xs text-gray-500">CO₂</p>
+                    <p className="text-xs text-gray-500">{t.rooms.sensorCo2}</p>
                     <p className="text-sm font-medium text-gray-900 tabular-nums">
                       {room.co2 != null ? `${Math.round(room.co2)} ppm` : '--'}
                     </p>
-                    {comfortPill(room.co2, (v) => statusHigherIsWorse(v, 500, 800))}
+                    {comfortPill(room.co2, (v) => statusHigherIsWorse(v, 500, 800), lang)}
                   </div>
                 </div>
                 <div className="flex items-center space-x-2">
@@ -663,11 +634,11 @@ export default function RoomsManagement({ onRoomSelect, isAdmin = false }: Rooms
                     <Volume2 className="w-4 h-4 text-purple-600" />
                   </div>
                   <div>
-                    <p className="text-xs text-gray-500">Noise</p>
+                    <p className="text-xs text-gray-500">{t.rooms.sensorNoise}</p>
                     <p className="text-sm font-medium text-gray-900 tabular-nums">
                       {room.noise != null ? `${Math.round(room.noise)} dB` : '--'}
                     </p>
-                    {comfortPill(room.noise, statusNoiseDb)}
+                    {comfortPill(room.noise, statusNoiseDb, lang)}
                   </div>
                 </div>
                 <div className="flex items-center space-x-2 col-span-2">
@@ -675,11 +646,11 @@ export default function RoomsManagement({ onRoomSelect, isAdmin = false }: Rooms
                     <Sun className="w-4 h-4 text-amber-600" />
                   </div>
                   <div>
-                    <p className="text-xs text-gray-500">Light</p>
+                    <p className="text-xs text-gray-500">{t.rooms.sensorLight}</p>
                     <p className="text-sm font-medium text-gray-900 tabular-nums">
                       {room.light != null ? `${Math.round(room.light)} lux` : '--'}
                     </p>
-                    {comfortPill(room.light, statusLux)}
+                    {comfortPill(room.light, statusLux, lang)}
                   </div>
                 </div>
                 <div className="flex items-center space-x-2">
@@ -687,11 +658,11 @@ export default function RoomsManagement({ onRoomSelect, isAdmin = false }: Rooms
                     <Factory className="w-4 h-4 text-slate-600" aria-hidden />
                   </div>
                   <div>
-                    <p className="text-xs text-gray-500">PM2.5</p>
+                    <p className="text-xs text-gray-500">{t.rooms.sensorPm25}</p>
                     <p className="text-sm font-medium text-gray-900 tabular-nums">
                       {room.pm25 != null ? `${room.pm25.toFixed(1)}` : '--'}
                     </p>
-                    {comfortPill(room.pm25, statusPm25)}
+                    {comfortPill(room.pm25, statusPm25, lang)}
                   </div>
                 </div>
                 <div className="flex items-center space-x-2">
@@ -699,11 +670,11 @@ export default function RoomsManagement({ onRoomSelect, isAdmin = false }: Rooms
                     <Factory className="w-4 h-4 text-zinc-600" aria-hidden />
                   </div>
                   <div>
-                    <p className="text-xs text-gray-500">PM10</p>
+                    <p className="text-xs text-gray-500">{t.rooms.sensorPm10}</p>
                     <p className="text-sm font-medium text-gray-900 tabular-nums">
                       {room.pm10 != null ? `${room.pm10.toFixed(1)}` : '--'}
                     </p>
-                    {comfortPill(room.pm10, statusPm10)}
+                    {comfortPill(room.pm10, statusPm10, lang)}
                   </div>
                 </div>
               </div>
@@ -719,12 +690,12 @@ export default function RoomsManagement({ onRoomSelect, isAdmin = false }: Rooms
                 }}
                 className="flex-1 min-w-[7rem] px-4 py-2 bg-emerald-500 text-white rounded-xl font-medium hover:bg-emerald-600 transition"
               >
-                Détails
+                {t.rooms.detailsButton}
               </button>
               {isAdmin && (
                 <button
                   type="button"
-                  title="Modifier la salle"
+                  title={t.rooms.editAriaLabel(room.name)}
                   onClick={(e) => {
                     e.stopPropagation();
                     setShowAddRoomForm(false);
@@ -739,7 +710,7 @@ export default function RoomsManagement({ onRoomSelect, isAdmin = false }: Rooms
                     setEditFormErrors({});
                   }}
                   className="px-3 py-2 bg-blue-50 text-blue-700 border border-blue-200 rounded-xl font-medium hover:bg-blue-100 transition flex items-center justify-center"
-                  aria-label={`Modifier la salle ${room.name}`}
+                  aria-label={t.rooms.editAriaLabel(room.name)}
                 >
                   <Pencil className="w-4 h-4" />
                 </button>
@@ -752,7 +723,7 @@ export default function RoomsManagement({ onRoomSelect, isAdmin = false }: Rooms
                     void handleDeleteRoom(room);
                   }}
                   className="px-3 py-2 bg-red-50 text-red-600 border border-red-200 rounded-xl font-medium hover:bg-red-100 transition flex items-center justify-center"
-                  aria-label={`Supprimer la salle ${room.name}`}
+                  aria-label={t.rooms.deleteAriaLabel(room.name)}
                 >
                   <Trash2 className="w-4 h-4" />
                 </button>

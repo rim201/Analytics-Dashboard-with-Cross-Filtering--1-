@@ -11,6 +11,7 @@ import {
   type AlertRow,
   type InAppNotificationRow,
 } from '../services/firestoreApi';
+import { useLang } from '../i18n/LanguageContext';
 
 interface TopNavProps {
   displayName: string;
@@ -35,13 +36,6 @@ function formatRequestTime(iso: string | undefined): string {
   }
 }
 
-function inAppResolutionMessage(n: InAppNotificationRow): string {
-  if (n.kind === 'alert_resolution_rejected') {
-    return 'Votre demande de résolution a été refusée.';
-  }
-  return 'Votre demande de résolution a été acceptée.';
-}
-
 export default function TopNav({
   displayName,
   email,
@@ -54,7 +48,9 @@ export default function TopNav({
   isDark = false,
   onToggleTheme,
 }: TopNavProps) {
-  const today = new Date().toLocaleDateString('fr-FR', {
+  const { t, lang, toggleLang } = useLang();
+
+  const today = new Date().toLocaleDateString(lang === 'fr' ? 'fr-FR' : 'en-US', {
     weekday: 'long',
     year: 'numeric',
     month: 'long',
@@ -120,8 +116,8 @@ export default function TopNav({
   useEffect(() => {
     if (!panelOpen) return;
     const onDocClick = (e: MouseEvent) => {
-      const t = e.target as Node;
-      if (wrapRef.current?.contains(t) || panelRef.current?.contains(t)) return;
+      const target = e.target as Node;
+      if (wrapRef.current?.contains(target) || panelRef.current?.contains(target)) return;
       setPanelOpen(false);
     };
     document.addEventListener('mousedown', onDocClick);
@@ -174,7 +170,7 @@ export default function TopNav({
             onClick={onMenuToggle}
             className="md:hidden p-2 rounded-xl transition shrink-0"
             style={{ color: 'var(--gray-500)', background: 'transparent' }}
-            aria-label="Open menu"
+            aria-label={t.openMenu}
           >
             <Menu className="w-5 h-5" />
           </button>
@@ -183,7 +179,7 @@ export default function TopNav({
               className="text-base sm:text-lg font-semibold truncate leading-tight"
               style={{ color: 'var(--gray-900)', letterSpacing: '-0.01em' }}
             >
-              Meeting Room Manager
+              {t.appTitle}
             </h1>
             <p className="text-xs capitalize hidden sm:block mt-0.5" style={{ color: 'var(--gray-400)' }}>
               {today}
@@ -191,8 +187,19 @@ export default function TopNav({
           </div>
         </div>
 
-        {/* Right – bell + user */}
+        {/* Right – lang + bell + user */}
         <div className="flex items-center gap-2">
+          {/* Language toggle */}
+          <button
+            type="button"
+            onClick={toggleLang}
+            className="theme-toggle text-xs font-semibold tracking-wide"
+            title={lang === 'fr' ? 'Switch to English' : 'Passer en français'}
+            aria-label={lang === 'fr' ? 'Switch to English' : 'Passer en français'}
+          >
+            {lang === 'fr' ? 'EN' : 'FR'}
+          </button>
+
           {/* Bell */}
           {showNotificationsBell && (
             <div className="relative" ref={wrapRef}>
@@ -200,20 +207,20 @@ export default function TopNav({
                 ref={bellButtonRef}
                 type="button"
                 onClick={() => setPanelOpen((o) => !o)}
-                className={`relative notification-bell ${panelOpen ? 'notification-bell--open' : ''}`}
+                className={`notification-bell ${panelOpen ? 'notification-bell--open' : ''}`}
                 style={{ padding: '0.5rem', color: 'var(--gray-600)' }}
-                title="Notifications"
+                title={t.notifications}
                 aria-expanded={panelOpen}
                 aria-haspopup="true"
-                aria-label={unreadCount > 0 ? `Notifications (${unreadCount} unread)` : 'Notifications'}
+                aria-label={unreadCount > 0 ? t.notificationsUnread(unreadCount) : t.notifications}
               >
                 <Bell className="w-5 h-5" strokeWidth={2} />
-                {unreadCount > 0 && (
-                  <span className="notification-badge">
-                    {unreadCount > 99 ? '99+' : unreadCount}
-                  </span>
-                )}
               </button>
+              {unreadCount > 0 && (
+                <span className="notification-badge">
+                  {unreadCount > 99 ? '99+' : unreadCount}
+                </span>
+              )}
             </div>
           )}
 
@@ -224,7 +231,7 @@ export default function TopNav({
               <div
                 ref={panelRef}
                 className="flex min-h-[16rem] flex-col overflow-hidden rounded-2xl"
-                aria-label="Notifications panel"
+                aria-label={t.notifications}
                 style={{
                   ...panelStyle,
                   background: 'var(--card)',
@@ -238,7 +245,7 @@ export default function TopNav({
                   style={{ borderBottom: '1px solid var(--gray-100)', background: 'var(--gray-50)' }}
                 >
                   <span className="text-sm font-semibold" style={{ color: 'var(--gray-900)' }}>
-                    Notifications
+                    {t.notifications}
                   </span>
                   {canAccessAlerts && (
                     <button
@@ -250,7 +257,7 @@ export default function TopNav({
                       className="text-xs font-medium transition"
                       style={{ color: '#059669' }}
                     >
-                      View alerts →
+                      {t.viewAlerts}
                     </button>
                   )}
                 </div>
@@ -272,7 +279,7 @@ export default function TopNav({
                             }`}
                           >
                             <p className="font-semibold" style={{ color: 'var(--gray-900)' }}>
-                              {inAppResolutionMessage(n)}
+                              {isRejected ? t.resolutionRejected : t.resolutionAccepted}
                             </p>
                             <p className="mt-1 line-clamp-2 text-xs" style={{ color: 'var(--gray-700)' }}>
                               {n.alertTitle}
@@ -291,7 +298,7 @@ export default function TopNav({
                                 color: 'var(--gray-700)',
                               }}
                             >
-                              Mark as read
+                              {t.markAsRead}
                             </button>
                           </li>
                         );
@@ -320,7 +327,7 @@ export default function TopNav({
                             </p>
                             {a.resolutionRequestedBy && (
                               <p className="mt-1.5 text-xs" style={{ color: '#7c3aed' }}>
-                                By <span className="font-semibold">{a.resolutionRequestedBy}</span>
+                                {t.by} <span className="font-semibold">{a.resolutionRequestedBy}</span>
                                 {a.resolutionRequestedAt && (
                                   <span style={{ color: 'var(--gray-500)' }}>
                                     {' '}· {formatRequestTime(a.resolutionRequestedAt)}
@@ -341,7 +348,7 @@ export default function TopNav({
                                   }}
                                 >
                                   <Check className="h-3.5 w-3.5" />
-                                  Approve
+                                  {t.approve}
                                 </button>
                                 <button
                                   type="button"
@@ -355,12 +362,12 @@ export default function TopNav({
                                   }}
                                 >
                                   <X className="h-3.5 w-3.5" />
-                                  Decline
+                                  {t.decline}
                                 </button>
                               </div>
                             ) : (
                               <p className="mt-2 text-xs leading-snug" style={{ color: '#7c3aed' }}>
-                                Awaiting admin approval.
+                                {t.awaitingAdminApproval}
                               </p>
                             )}
                           </li>
@@ -374,7 +381,7 @@ export default function TopNav({
                     <div className="flex flex-col items-center justify-center px-6 py-16 text-center">
                       <Inbox className="mb-3 h-12 w-12" style={{ color: 'var(--gray-300)' }} />
                       <p className="text-sm" style={{ color: 'var(--gray-500)' }}>
-                        No notifications
+                        {t.noNotifications}
                       </p>
                     </div>
                   )}
@@ -389,13 +396,10 @@ export default function TopNav({
               type="button"
               onClick={onToggleTheme}
               className="theme-toggle"
-              title={isDark ? 'Switch to light mode' : 'Switch to dark mode'}
-              aria-label={isDark ? 'Switch to light mode' : 'Switch to dark mode'}
+              title={isDark ? t.switchToLight : t.switchToDark}
+              aria-label={isDark ? t.switchToLight : t.switchToDark}
             >
-              {isDark
-                ? <Sun className="w-4 h-4" />
-                : <Moon className="w-4 h-4" />
-              }
+              {isDark ? <Sun className="w-4 h-4" /> : <Moon className="w-4 h-4" />}
             </button>
           )}
 
@@ -426,8 +430,8 @@ export default function TopNav({
               onClick={() => void signOutSession()}
               className="p-2 rounded-xl transition"
               style={{ color: 'var(--gray-400)' }}
-              title="Sign out"
-              aria-label="Sign out"
+              title={t.signOut}
+              aria-label={t.signOut}
             >
               <LogOut className="w-4 h-4" />
             </button>

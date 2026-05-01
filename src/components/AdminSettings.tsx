@@ -1,7 +1,6 @@
 import {
   Users,
   Cpu,
-  Shield,
   Settings as SettingsIcon,
   Wifi,
   Brain,
@@ -17,6 +16,7 @@ import {
   RefreshCw,
 } from 'lucide-react';
 import React, { useCallback, useEffect, useRef, useState } from 'react';
+import { useLang } from '../i18n/LanguageContext';
 import {
   appendCurrentSnapshotForRoomAndSignalLinkedDevices,
   appendCurrentSnapshotsForAllRooms,
@@ -113,6 +113,8 @@ export default function AdminSettings() {
   const [aiLoadBusy, setAiLoadBusy] = useState(false);
   const [aiSaveBusy, setAiSaveBusy] = useState(false);
   const [aiLogModalOpen, setAiLogModalOpen] = useState(false);
+
+  const { t } = useLang();
 
   const showToast = (type: ToastState['type'], message: string) => {
     setToast({ type, message });
@@ -706,22 +708,22 @@ export default function AdminSettings() {
 
       {/* Header */}
       <div>
-        <h2 className="text-2xl font-bold text-gray-900">Admin & Settings</h2>
-        <p className="text-sm text-gray-500">Manage users, devices, and system configuration</p>
+        <h2 className="text-2xl font-bold text-gray-900">{t.settings.title}</h2>
+        <p className="text-sm text-gray-500">{t.settings.subtitle}</p>
       </div>
 
       {/* Stats */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3 sm:gap-4">
         <div className="bg-white rounded-2xl p-4 sm:p-6 shadow-lg border border-gray-100">
           <div className="flex items-center justify-between mb-2">
-            <span className="text-xs sm:text-sm text-gray-500">Utilisateurs actifs</span>
+            <span className="text-xs sm:text-sm text-gray-500">{t.settings.statActiveUsers}</span>
             <Users className="w-5 h-5 text-emerald-600 shrink-0" />
           </div>
           <div className="text-xl sm:text-2xl font-bold text-gray-900">{activeUsers}/{users.length}</div>
         </div>
         <div className="bg-white rounded-2xl p-4 sm:p-6 shadow-lg border border-gray-100">
           <div className="flex items-center justify-between mb-2">
-            <span className="text-xs sm:text-sm text-gray-500">Appareils IoT</span>
+            <span className="text-xs sm:text-sm text-gray-500">{t.settings.statIotDevices}</span>
             <Wifi className="w-5 h-5 text-blue-600 shrink-0" />
           </div>
           <div className="text-xl sm:text-2xl font-bold text-gray-900">
@@ -731,14 +733,14 @@ export default function AdminSettings() {
         </div>
         <div className="bg-white rounded-2xl p-4 sm:p-6 shadow-lg border border-gray-100">
           <div className="flex items-center justify-between mb-2">
-            <span className="text-xs sm:text-sm text-gray-500">Base de données</span>
+            <span className="text-xs sm:text-sm text-gray-500">{t.settings.statDatabase}</span>
             <Database className="w-5 h-5 text-purple-600 shrink-0" />
           </div>
           <div className="text-xl sm:text-2xl font-bold text-emerald-600">OK</div>
         </div>
         <div className="bg-white rounded-2xl p-4 sm:p-6 shadow-lg border border-gray-100">
           <div className="flex items-center justify-between mb-2">
-            <span className="text-xs sm:text-sm text-gray-500">Config IA</span>
+            <span className="text-xs sm:text-sm text-gray-500">{t.settings.statAiConfig}</span>
             <Brain className="w-5 h-5 text-amber-600 shrink-0" />
           </div>
           <div className="text-xl sm:text-2xl font-bold text-gray-900">
@@ -747,15 +749,15 @@ export default function AdminSettings() {
         </div>
       </div>
 
-      {/* Tabs — scrollables sur mobile */}
+      {/* Tabs */}
       <div className="bg-white rounded-2xl p-2 shadow-lg border border-gray-100 overflow-x-auto">
         <div className="flex space-x-1 min-w-max">
           {[
-            { id: 'users' as const, label: 'Utilisateurs', icon: Users },
-            { id: 'devices' as const, label: 'IoT Devices', icon: Wifi },
-            { id: 'roomData' as const, label: 'Mesures salles', icon: CalendarClock },
-            { id: 'system' as const, label: 'Système', icon: Cpu },
-            { id: 'ai' as const, label: 'Config IA', icon: Brain },
+            { id: 'users' as const, label: t.settings.tabUsers, icon: Users },
+            { id: 'devices' as const, label: t.settings.tabDevices, icon: Wifi },
+            { id: 'roomData' as const, label: t.settings.tabRoomData, icon: CalendarClock },
+            { id: 'system' as const, label: t.settings.tabSystem, icon: Cpu },
+            { id: 'ai' as const, label: t.settings.tabAi, icon: Brain },
           ].map((tab) => {
             const Icon = tab.icon;
             return (
@@ -781,13 +783,13 @@ export default function AdminSettings() {
       {activeTab === 'users' && (
         <div className="bg-white rounded-2xl shadow-lg border border-gray-100 overflow-hidden">
           <div className="p-6 border-b border-gray-100 flex items-center justify-between">
-            <h3 className="font-semibold text-gray-900">User Management</h3>
+            <h3 className="font-semibold text-gray-900">{t.settings.tabUsers}</h3>
             <button
               type="button"
               onClick={openAddUserModal}
               className="px-4 py-2 bg-emerald-500 text-white rounded-xl font-medium hover:bg-emerald-600 transition"
             >
-              Add User
+              {t.settings.addUser}
             </button>
           </div>
           {userModalOpen && (
@@ -1016,7 +1018,7 @@ export default function AdminSettings() {
             </ol>
           </div>
           <div className="p-6 border-b border-gray-100 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-            <h3 className="font-semibold text-gray-900">IoT Devices Management</h3>
+            <h3 className="font-semibold text-gray-900">{t.settings.tabDevices}</h3>
             <div className="flex items-center gap-2">
               <label htmlFor="deploy-interval-min" className="text-xs text-gray-600 whitespace-nowrap">
                 Intervalle auto (min)
@@ -1036,7 +1038,7 @@ export default function AdminSettings() {
                 onClick={openAddDeviceModal}
                 className="px-4 py-2 bg-emerald-500 text-white rounded-xl font-medium hover:bg-emerald-600 transition"
               >
-                Add Device
+                {t.settings.addDevice}
               </button>
             </div>
           </div>
@@ -1458,35 +1460,6 @@ export default function AdminSettings() {
             )}
           </div>
 
-          {/* Security Settings */}
-          <div className="bg-white rounded-2xl p-6 shadow-lg border border-gray-100">
-            <div className="flex items-center space-x-3 mb-4">
-              <Shield className="w-6 h-6 text-gray-700" />
-              <h3 className="font-semibold text-gray-900">Security & Access Control</h3>
-            </div>
-            <div className="space-y-3">
-              <div className="flex items-center justify-between p-3 bg-gray-50 rounded-xl">
-                <div>
-                  <div className="font-medium text-gray-900">Two-Factor Authentication</div>
-                  <div className="text-sm text-gray-500">Require 2FA for all admin users</div>
-                </div>
-                <label className="relative inline-flex items-center cursor-pointer">
-                  <input type="checkbox" className="sr-only peer" defaultChecked />
-                  <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-emerald-300 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-emerald-600"></div>
-                </label>
-              </div>
-              <div className="flex items-center justify-between p-3 bg-gray-50 rounded-xl">
-                <div>
-                  <div className="font-medium text-gray-900">Session Timeout</div>
-                  <div className="text-sm text-gray-500">Auto logout after 30 minutes of inactivity</div>
-                </div>
-                <label className="relative inline-flex items-center cursor-pointer">
-                  <input type="checkbox" className="sr-only peer" defaultChecked />
-                  <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-emerald-300 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-emerald-600"></div>
-                </label>
-              </div>
-            </div>
-          </div>
         </div>
       )}
 

@@ -1,5 +1,6 @@
 import { LayoutDashboard, DoorOpen, Radio, Siren, Settings, Zap, X } from 'lucide-react';
 import { PageType } from '../App';
+import { useLang } from '../i18n/LanguageContext';
 
 interface SidebarProps {
   currentPage: PageType;
@@ -10,22 +11,6 @@ interface SidebarProps {
   onClose?: () => void;
 }
 
-type NavItem = {
-  id: PageType;
-  label: string;
-  icon: typeof LayoutDashboard;
-  adminOnly: boolean;
-  staffAlertsOnly?: boolean;
-};
-
-const allNavItems: NavItem[] = [
-  { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard, adminOnly: false },
-  { id: 'rooms', label: 'Rooms', icon: DoorOpen, adminOnly: false },
-  { id: 'room-details', label: 'Live Monitoring', icon: Radio, adminOnly: false },
-  { id: 'alerts', label: 'Alerts', icon: Siren, adminOnly: false, staffAlertsOnly: true },
-  { id: 'settings', label: 'Settings', icon: Settings, adminOnly: true },
-];
-
 export default function Sidebar({
   currentPage,
   onNavigate,
@@ -34,6 +19,17 @@ export default function Sidebar({
   open = false,
   onClose,
 }: SidebarProps) {
+  const { t } = useLang();
+
+  type NavItem = { id: PageType; label: string; icon: typeof LayoutDashboard; adminOnly: boolean; staffAlertsOnly?: boolean };
+  const allNavItems: NavItem[] = [
+    { id: 'dashboard', label: t.sidebar.navDashboard, icon: LayoutDashboard, adminOnly: false },
+    { id: 'rooms', label: t.sidebar.navRooms, icon: DoorOpen, adminOnly: false },
+    { id: 'room-details', label: t.sidebar.navMonitoring, icon: Radio, adminOnly: false },
+    { id: 'alerts', label: t.sidebar.navAlerts, icon: Siren, adminOnly: false, staffAlertsOnly: true },
+    { id: 'settings', label: t.sidebar.navSettings, icon: Settings, adminOnly: true },
+  ];
+
   const navItems = allNavItems.filter((item) => {
     if (item.adminOnly && !isAdmin) return false;
     if (item.staffAlertsOnly && !canAccessAlerts) return false;
@@ -80,7 +76,7 @@ export default function Sidebar({
                   SmartRoom
                 </p>
                 <p className="text-xs" style={{ color: 'var(--gray-400)' }}>
-                  AI Manager
+                  {t.sidebar.aiManager}
                 </p>
               </div>
             </div>
@@ -89,7 +85,7 @@ export default function Sidebar({
               onClick={onClose}
               className="md:hidden p-1.5 rounded-lg transition"
               style={{ color: 'var(--gray-400)' }}
-              aria-label="Close menu"
+              aria-label={t.sidebar.closeMenu}
             >
               <X className="w-4 h-4" />
             </button>
@@ -102,7 +98,7 @@ export default function Sidebar({
             className="font-semibold uppercase tracking-wider"
             style={{ color: 'var(--gray-400)', fontSize: 10 }}
           >
-            Navigation
+            {t.sidebar.navigation}
           </p>
         </div>
 
@@ -143,11 +139,11 @@ export default function Sidebar({
                 style={{ background: '#10b981', boxShadow: '0 0 0 3px rgba(16,185,129,0.2)' }}
               />
               <span className="text-xs font-semibold" style={{ color: 'var(--gray-800)' }}>
-                AI Status
+                {t.sidebar.aiStatus}
               </span>
             </div>
             <p className="text-xs" style={{ color: 'var(--gray-500)' }}>
-              All systems operational
+              {t.sidebar.allSystemsOperational}
             </p>
           </div>
         </div>

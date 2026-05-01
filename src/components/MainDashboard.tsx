@@ -19,6 +19,8 @@ import {
   subscribeRoomsWithLatestMeasurements,
   type RoomListRow,
 } from '../services/firestoreApi';
+import { useLang } from '../i18n/LanguageContext';
+import { translateChipLabel } from '../i18n/translations';
 
 const AUTO_ALERT_COOLDOWN_MS = 2 * 60 * 60 * 1000;
 const autoAlertThrottle = new Map<string, number>();
@@ -45,7 +47,7 @@ interface MainDashboardProps {
   onNavigate: (page: PageType) => void;
 }
 
-function EmptyChartArea() {
+function EmptyChartArea({ label }: { label: string }) {
   return (
     <div
       className="h-[240px] min-h-[240px] rounded-xl flex items-center justify-center"
@@ -53,66 +55,68 @@ function EmptyChartArea() {
       aria-hidden
     >
       <p className="text-sm" style={{ color: 'var(--gray-400)' }}>
-        No data yet
+        {label}
       </p>
     </div>
   );
 }
 
-const SENSOR_CONFIG = [
-  {
-    key: 'temperature' as const,
-    label: 'Temperature',
-    unit: '°C',
-    icon: Thermometer,
-    iconBg: '#fff7ed',
-    iconColor: '#f97316',
-    iconBorder: '#fed7aa',
-    format: (v: number) => `${v}°C`,
-  },
-  {
-    key: 'humidity' as const,
-    label: 'Humidity',
-    unit: '%',
-    icon: Droplets,
-    iconBg: '#ecfeff',
-    iconColor: '#06b6d4',
-    iconBorder: '#a5f3fc',
-    format: (v: number) => `${Math.round(v)}%`,
-  },
-  {
-    key: 'co2' as const,
-    label: 'CO₂',
-    unit: 'ppm',
-    icon: Wind,
-    iconBg: '#eff6ff',
-    iconColor: '#3b82f6',
-    iconBorder: '#bfdbfe',
-    format: (v: number) => `${Math.round(v)} ppm`,
-  },
-  {
-    key: 'noise' as const,
-    label: 'Noise',
-    unit: 'dB',
-    icon: Volume2,
-    iconBg: '#faf5ff',
-    iconColor: '#a855f7',
-    iconBorder: '#e9d5ff',
-    format: (v: number) => `${Math.round(v)} dB`,
-  },
-  {
-    key: 'light' as const,
-    label: 'Light',
-    unit: 'lux',
-    icon: Sun,
-    iconBg: '#fffbeb',
-    iconColor: '#f59e0b',
-    iconBorder: '#fde68a',
-    format: (v: number) => `${Math.round(v)} lux`,
-  },
-] as const;
-
 export default function MainDashboard({ onNavigate }: MainDashboardProps) {
+  const { t, lang } = useLang();
+
+  const SENSOR_CONFIG = [
+    {
+      key: 'temperature' as const,
+      label: t.dashboard.sensorTemp,
+      unit: '°C',
+      icon: Thermometer,
+      iconBg: '#fff7ed',
+      iconColor: '#f97316',
+      iconBorder: '#fed7aa',
+      format: (v: number) => `${v}°C`,
+    },
+    {
+      key: 'humidity' as const,
+      label: t.dashboard.sensorHumidity,
+      unit: '%',
+      icon: Droplets,
+      iconBg: '#ecfeff',
+      iconColor: '#06b6d4',
+      iconBorder: '#a5f3fc',
+      format: (v: number) => `${Math.round(v)}%`,
+    },
+    {
+      key: 'co2' as const,
+      label: t.dashboard.sensorCo2,
+      unit: 'ppm',
+      icon: Wind,
+      iconBg: '#eff6ff',
+      iconColor: '#3b82f6',
+      iconBorder: '#bfdbfe',
+      format: (v: number) => `${Math.round(v)} ppm`,
+    },
+    {
+      key: 'noise' as const,
+      label: t.dashboard.sensorNoise,
+      unit: 'dB',
+      icon: Volume2,
+      iconBg: '#faf5ff',
+      iconColor: '#a855f7',
+      iconBorder: '#e9d5ff',
+      format: (v: number) => `${Math.round(v)} dB`,
+    },
+    {
+      key: 'light' as const,
+      label: t.dashboard.sensorLight,
+      unit: 'lux',
+      icon: Sun,
+      iconBg: '#fffbeb',
+      iconColor: '#f59e0b',
+      iconBorder: '#fde68a',
+      format: (v: number) => `${Math.round(v)} lux`,
+    },
+  ] as const;
+
   const [summary, setSummary] = useState({
     comfortScore: 0,
     temperature: null as number | null,
@@ -133,8 +137,8 @@ export default function MainDashboard({ onNavigate }: MainDashboardProps) {
 
   useEffect(() => {
     if (!alertToast) return;
-    const t = setTimeout(() => setAlertToast(null), 6000);
-    return () => clearTimeout(t);
+    const timer = setTimeout(() => setAlertToast(null), 6000);
+    return () => clearTimeout(timer);
   }, [alertToast]);
 
   useEffect(() => {
@@ -257,10 +261,10 @@ export default function MainDashboard({ onNavigate }: MainDashboardProps) {
             className="text-2xl font-bold leading-tight"
             style={{ color: 'var(--gray-900)', letterSpacing: '-0.025em' }}
           >
-            Dashboard
+            {t.dashboard.title}
           </h2>
           <p className="text-sm mt-0.5" style={{ color: 'var(--gray-500)' }}>
-            Overview · all rooms · last 24 h
+            {t.dashboard.subtitle}
           </p>
         </div>
 
@@ -268,11 +272,11 @@ export default function MainDashboard({ onNavigate }: MainDashboardProps) {
         <div className="flex flex-wrap items-center gap-3">
           <div className="stat-chip stat-chip-available">
             <span className="w-2 h-2 rounded-full shrink-0 dot-available" />
-            {summary.roomOverview.available} available
+            {t.dashboard.available(summary.roomOverview.available)}
           </div>
           <div className="stat-chip stat-chip-occupied">
             <span className="w-2 h-2 rounded-full shrink-0 dot-busy" />
-            {summary.roomOverview.occupied} occupied
+            {t.dashboard.occupied(summary.roomOverview.occupied)}
           </div>
           <div className="stat-chip stat-chip-comfort">
             <div className="flex items-center gap-0.5">
@@ -315,7 +319,7 @@ export default function MainDashboard({ onNavigate }: MainDashboardProps) {
                 </div>
                 {status != null ? (
                   <span className={`px-1.5 py-0.5 text-[10px] font-semibold rounded-md ${comfortChipToneClass(status)}`}>
-                    {status.label}
+                    {translateChipLabel(status.label, lang)}
                   </span>
                 ) : (
                   <span
@@ -352,10 +356,10 @@ export default function MainDashboard({ onNavigate }: MainDashboardProps) {
         >
           <div className="mb-6">
             <h3 className="text-base font-semibold" style={{ color: 'var(--gray-900)' }}>
-              Temperature trend
+              {t.dashboard.temperatureTrend}
             </h3>
             <p className="text-xs mt-0.5" style={{ color: 'var(--gray-500)' }}>
-              Last 24 hours · all rooms · hourly avg
+              {t.dashboard.chartSubtitle}
             </p>
           </div>
           {summary.temperatureData.length > 0 ? (
@@ -384,7 +388,7 @@ export default function MainDashboard({ onNavigate }: MainDashboardProps) {
               </AreaChart>
             </ResponsiveContainer>
           ) : (
-            <EmptyChartArea />
+            <EmptyChartArea label={t.dashboard.noDataYet} />
           )}
         </div>
 
@@ -395,10 +399,10 @@ export default function MainDashboard({ onNavigate }: MainDashboardProps) {
         >
           <div className="mb-6">
             <h3 className="text-base font-semibold" style={{ color: 'var(--gray-900)' }}>
-              CO₂ level trend
+              {t.dashboard.co2Trend}
             </h3>
             <p className="text-xs mt-0.5" style={{ color: 'var(--gray-500)' }}>
-              Last 24 hours · all rooms · hourly avg
+              {t.dashboard.chartSubtitle}
             </p>
           </div>
           {summary.co2Data.length > 0 ? (
@@ -421,7 +425,7 @@ export default function MainDashboard({ onNavigate }: MainDashboardProps) {
               </LineChart>
             </ResponsiveContainer>
           ) : (
-            <EmptyChartArea />
+            <EmptyChartArea label={t.dashboard.noDataYet} />
           )}
         </div>
 
@@ -432,10 +436,10 @@ export default function MainDashboard({ onNavigate }: MainDashboardProps) {
         >
           <div className="mb-6">
             <h3 className="text-base font-semibold" style={{ color: 'var(--gray-900)' }}>
-              Light intensity trend
+              {t.dashboard.lightTrend}
             </h3>
             <p className="text-xs mt-0.5" style={{ color: 'var(--gray-500)' }}>
-              Last 24 hours · all rooms · hourly avg
+              {t.dashboard.chartSubtitle}
             </p>
           </div>
           {summary.lightData.length > 0 ? (
@@ -464,7 +468,7 @@ export default function MainDashboard({ onNavigate }: MainDashboardProps) {
               </AreaChart>
             </ResponsiveContainer>
           ) : (
-            <EmptyChartArea />
+            <EmptyChartArea label={t.dashboard.noDataYet} />
           )}
         </div>
 
@@ -475,10 +479,10 @@ export default function MainDashboard({ onNavigate }: MainDashboardProps) {
         >
           <div className="mb-6">
             <h3 className="text-base font-semibold" style={{ color: 'var(--gray-900)' }}>
-              Noise level trend
+              {t.dashboard.noiseTrend}
             </h3>
             <p className="text-xs mt-0.5" style={{ color: 'var(--gray-500)' }}>
-              Last 24 hours · all rooms · hourly avg
+              {t.dashboard.chartSubtitle}
             </p>
           </div>
           {summary.noiseData.length > 0 ? (
@@ -501,7 +505,7 @@ export default function MainDashboard({ onNavigate }: MainDashboardProps) {
               </LineChart>
             </ResponsiveContainer>
           ) : (
-            <EmptyChartArea />
+            <EmptyChartArea label={t.dashboard.noDataYet} />
           )}
         </div>
       </div>
@@ -529,17 +533,17 @@ export default function MainDashboard({ onNavigate }: MainDashboardProps) {
             </div>
             <div>
               <p className="text-sm font-bold" style={{ color: 'var(--gray-900)' }}>
-                AI Recommendations
+                {t.dashboard.aiRecommendations}
               </p>
               <p className="text-xs" style={{ color: 'var(--gray-500)' }}>
-                Based on latest sensor readings
+                {t.dashboard.aiSubtitle}
               </p>
             </div>
           </div>
           <div className="flex items-center gap-2">
             {!aiAutoApply && (
               <span className="hidden sm:inline text-xs px-2 py-1 rounded-lg font-medium auto-apply-badge">
-                Auto-apply off
+                {t.dashboard.autoApplyOff}
               </span>
             )}
             <button
@@ -548,7 +552,7 @@ export default function MainDashboard({ onNavigate }: MainDashboardProps) {
               className="text-xs px-3 py-1.5 rounded-lg font-semibold text-white transition"
               style={{ background: '#10b981' }}
             >
-              View rooms
+              {t.dashboard.viewRooms}
             </button>
           </div>
         </div>
@@ -557,7 +561,7 @@ export default function MainDashboard({ onNavigate }: MainDashboardProps) {
         <div className="p-6">
           {aiRecs.length === 0 ? (
             <p className="text-sm text-center py-4" style={{ color: 'var(--gray-400)' }}>
-              No suggestions — add sensor data to rooms or lower AI aggressiveness in settings.
+              {t.dashboard.noSuggestions}
             </p>
           ) : (
             <div className="grid gap-3 sm:grid-cols-2">
