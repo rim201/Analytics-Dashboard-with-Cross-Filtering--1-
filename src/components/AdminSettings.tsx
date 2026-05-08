@@ -47,7 +47,12 @@ import {
   type DeviceRecord,
   type UserRecord,
 } from '../services/firestoreApi';
-import { buildDeploySh, deployScriptFilenameFromIp } from '../services/piProvisioning';
+import {
+  buildDeploySh,
+  deployScriptFilenameFromIp,
+  type LightSensorType,
+  type MicrophoneType,
+} from '../services/piProvisioning';
 import { validateDeviceIpAddress } from '../utils/deviceIpValidation';
 import { fetchServiceAccountJsonFromRemoteConfig, REMOTE_CONFIG_SERVICE_ACCOUNT_PARAM } from '../services/remoteConfigPi';
 import {
@@ -99,6 +104,8 @@ export default function AdminSettings() {
   const [measureDateTo, setMeasureDateTo] = useState('');
   const [measureBusy, setMeasureBusy] = useState(false);
   const [deployIntervalMinutes, setDeployIntervalMinutes] = useState('5');
+  const [deployLightSensor, setDeployLightSensor] = useState<LightSensorType>('bh1750_i2c');
+  const [deployMicrophone, setDeployMicrophone] = useState<MicrophoneType>('inmp441_i2s');
   const [retentionWeeksInput, setRetentionWeeksInput] = useState(String(DEFAULT_RETENTION_WEEKS));
   const [retentionAutoPurge, setRetentionAutoPurge] = useState(true);
   const [retentionLastPurge, setRetentionLastPurge] = useState<Date | null>(null);
@@ -440,6 +447,7 @@ export default function AdminSettings() {
     const script = buildDeploySh(params, {
       embeddedServiceAccountJson: embedded,
       intervalMinutes: minutes,
+      sensorConfig: { lightSensor: deployLightSensor, microphone: deployMicrophone },
     });
     downloadTextFile(filename, script, 'text/x-shellscript;charset=utf-8');
     showToast(
@@ -1017,6 +1025,64 @@ export default function AdminSettings() {
               </li>
             </ol>
           </div>
+<<<<<<< HEAD
+          <div className="p-6 border-b border-gray-100">
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+              <h3 className="font-semibold text-gray-900 mt-1">{t.settings.tabDevices}</h3>
+              <div className="flex flex-col gap-2">
+                {/* Sensor type selectors — appliqués au script de déploiement */}
+                <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
+                  <div className="flex items-center gap-2">
+                    <label className="text-xs text-gray-600 whitespace-nowrap">Capteur lumière</label>
+                    <select
+                      value={deployLightSensor}
+                      onChange={(e) => setDeployLightSensor(e.target.value as LightSensorType)}
+                      className="rounded-lg border border-gray-300 px-2 py-1 text-sm outline-none focus:ring-2 focus:ring-emerald-500"
+                      title="Type de capteur de lumière branché sur le Raspberry Pi"
+                    >
+                      <option value="bh1750_i2c">GY-30 / BH1750FVI (I2C — 5 broches)</option>
+                      <option value="analog_3pin">Analogique / numérique (3 broches : OUT GND VCC)</option>
+                      <option value="none">Aucun capteur de lumière</option>
+                    </select>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <label className="text-xs text-gray-600 whitespace-nowrap">Microphone</label>
+                    <select
+                      value={deployMicrophone}
+                      onChange={(e) => setDeployMicrophone(e.target.value as MicrophoneType)}
+                      className="rounded-lg border border-gray-300 px-2 py-1 text-sm outline-none focus:ring-2 focus:ring-emerald-500"
+                      title="Microphone I2S branché sur le Raspberry Pi"
+                    >
+                      <option value="inmp441_i2s">INMP441 I2S MEMS</option>
+                      <option value="none">Aucun microphone</option>
+                    </select>
+                  </div>
+                </div>
+                {/* Interval + Add button */}
+                <div className="flex items-center gap-2">
+                  <label htmlFor="deploy-interval-min" className="text-xs text-gray-600 whitespace-nowrap">
+                    Intervalle auto (min)
+                  </label>
+                  <input
+                    id="deploy-interval-min"
+                    type="number"
+                    min={1}
+                    max={1440}
+                    value={deployIntervalMinutes}
+                    onChange={(e) => setDeployIntervalMinutes(e.target.value)}
+                    className="w-20 rounded-lg border border-gray-300 px-2 py-1 text-sm outline-none focus:ring-2 focus:ring-emerald-500"
+                    title="Intégré dans le script téléchargé (agent_config.json > intervalSeconds)."
+                  />
+                  <button
+                    type="button"
+                    onClick={openAddDeviceModal}
+                    className="px-4 py-2 bg-emerald-500 text-white rounded-xl font-medium hover:bg-emerald-600 transition"
+                  >
+                    {t.settings.addDevice}
+                  </button>
+                </div>
+              </div>
+=======
           <div className="p-6 border-b border-gray-100 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
             <h3 className="font-semibold text-gray-900">{t.settings.tabDevices}</h3>
             <div className="flex items-center gap-2">
@@ -1040,6 +1106,7 @@ export default function AdminSettings() {
               >
                 {t.settings.addDevice}
               </button>
+>>>>>>> de425048a4433d79704cfc35b86f357f42007b07
             </div>
           </div>
           {deviceModalOpen && (

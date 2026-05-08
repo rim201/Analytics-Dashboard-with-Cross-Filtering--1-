@@ -7,6 +7,18 @@ export type PiAgentBundleParams = {
   sensorNotes?: string;
 };
 
+/** Matériel physique présent sur le Raspberry Pi. */
+export type LightSensorType = 'bh1750_i2c' | 'analog_3pin' | 'none';
+export type MicrophoneType = 'inmp441_i2s' | 'none';
+export type SensorHardwareConfig = {
+  /** GY-30/BH1750FVI (I2C 5 broches), capteur analogique/numérique 3 broches (OUT/GND/VCC), ou aucun. */
+  lightSensor: LightSensorType;
+  /** INMP441 I2S MEMS, ou aucun microphone. */
+  microphone: MicrophoneType;
+  /** Broche GPIO BCM pour la sortie OUT du capteur 3 broches (défaut 27). */
+  analogLightGpioPin?: number;
+};
+
 export const DEFAULT_AGENT_INTERVAL_SECONDS = 300;
 
 const SENSOR_DOC = `Capteurs cibles (broches / ports dans hardware) :
@@ -25,9 +37,43 @@ L’utilisateur du service (souvent « pi ») doit être dans le groupe dialout 
 export function buildAgentConfigJson(
   params: PiAgentBundleParams,
   intervalSeconds: number = DEFAULT_AGENT_INTERVAL_SECONDS,
+  sensorConfig?: SensorHardwareConfig,
 ): string {
+  const lightSensor = sensorConfig?.lightSensor ?? 'bh1750_i2c';
+  const lightSensorType =
+    lightSensor === 'analog_3pin' ? 'analog_gpio' :
+    lightSensor === 'none' ? 'none' : 'bh1750_i2c';
+  const analogPin = sensorConfig?.analogLightGpioPin ?? 27;
+  const micDisabled = sensorConfig?.microphone === 'none';
+
   return `${JSON.stringify(
     {
+<<<<<<< HEAD
+      firebase: {
+        project_id: firebaseClientConfig.projectId,
+      },
+      device_id: params.deviceDocId,
+      room_id: params.roomId,
+      interval_seconds: intervalSeconds,
+      sensors: {
+        dht22_pin: 4,
+        pir_pin: 17,
+        light_sensor_type: lightSensorType,
+        light_gpio_pin: analogPin,
+        bh1750_addr: 35,
+        bh1750_i2c_bus: 1,
+        inmp441_device: micDisabled ? 'disabled' : null,
+        inmp441_samplerate: 16000,
+        inmp441_duration: 1.0,
+        sds011_port: '/dev/ttyUSB0',
+        mq135_ads1115_channel: 0,
+      },
+      noise_alerts: {
+        enabled: true,
+        medium_threshold: 35,
+        loud_threshold: 65,
+        cooldown_minutes: 30,
+=======
       firebaseClient: firebaseClientConfig,
       deviceDocId: params.deviceDocId,
       roomId: params.roomId,
@@ -59,6 +105,7 @@ export function buildAgentConfigJson(
         max9814SampleCount: 400,
         max9814NoiseGain: 0.09,
         max9814NoiseFloorDb: 34,
+>>>>>>> de425048a4433d79704cfc35b86f357f42007b07
       },
     },
     null,
@@ -67,1074 +114,367 @@ export function buildAgentConfigJson(
 }
 
 /** Script Python : lecture périodique + réaction à sensorCaptureRequestedAt / serviceRestartRequestedAt (dashboard). */
-export function buildSensorAgentPy(): string {
+export function buildSensorAgentPy(_config?: SensorHardwareConfig): string {
   return `#!/usr/bin/env python3
 """
-Agent salle — envoi mesures vers Firestore (firebase-admin).
-Capteurs : DHT22, BH1750FVI (GY-30), SDS011, CO2 UART (0–5000 ppm), MAX9814+MCP3008, PIR HC-SR501.
-Chaque grandeur : valeur réelle si lisible, sinon null (pas de valeurs simulées).
-Paquets : smbus2, pyserial, spidev, rpi-lgpio (GPIO Pi 5), gpiozero (PIR : DigitalInputDevice persistant, is_active), Blinka + adafruit-circuitpython-dht pour DHT (voir install.sh).
+SmartRoom Sensor Agent — Raspberry Pi
+Capteurs : DHT22 (temp/humidite), BH1750 I2C ou capteur analogique 3 broches (lumiere),
+           INMP441 I2S (niveau sonore 0-100), SDS011 (PM2.5/PM10), MQ135/ADS1115 (CO2), PIR (mouvement)
+Configuration via agent_config.json > sensors > light_sensor_type (bh1750_i2c | analog_gpio | none)
+                                              > inmp441_device ('disabled' pour desactiver)
 """
-from __future__ import annotations
-
+import time
 import json
 import math
+import logging
+import sys
 import os
+import glob
+import struct
+import wave
 import subprocess
-import time
+import threading
 from datetime import datetime, timezone
 from pathlib import Path
 
-try:
-    import firebase_admin
-    from firebase_admin import credentials, firestore
-    from google.cloud.firestore import DELETE_FIELD
-except ImportError:
-    raise SystemExit("Installez: pip install firebase-admin google-cloud-firestore")
+AGENT_START_TIME = time.time()
 
-DIR = Path(__file__).resolve().parent
-CFG_PATH = DIR / "agent_config.json"
-SA_PATH = DIR / "serviceAccountKey.json"
+# ── Firebase ─────────────────────────────────────────────────────────────────
+import firebase_admin
+from firebase_admin import credentials, firestore
 
-MEASUREMENT_PAD = 16
+# ── Config ───────────────────────────────────────────────────────────────────
+BASE_DIR = Path(__file__).parent
+CONFIG_PATH = BASE_DIR / "agent_config.json"
+KEY_PATH = BASE_DIR / "serviceAccountKey.json"
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(message)s",
+    handlers=[logging.StreamHandler(sys.stdout)],
+)
+log = logging.getLogger("sensor_agent")
 
 
-def load_cfg():
-    with open(CFG_PATH, encoding="utf-8") as f:
+def load_config() -> dict:
+    with open(CONFIG_PATH) as f:
         return json.load(f)
 
 
-def measurement_doc_id(ts_ms: int) -> str:
-    return str(ts_ms).zfill(MEASUREMENT_PAD)
+# ── Firebase ──────────────────────────────────────────────────────────────────
+def init_firebase(project_id: str):
+    if not firebase_admin._apps:
+        cred = credentials.Certificate(str(KEY_PATH))
+        firebase_admin.initialize_app(cred, {"projectId": project_id})
+    return firestore.client()
 
 
-def _cfg_int(hw: dict, key: str, default: int) -> int:
-    v = hw.get(key, default)
-    if v is None:
-        return int(default)
-    if isinstance(v, bool):
-        return int(default)
-    if isinstance(v, int):
-        return int(v)
-    if isinstance(v, float):
-        return int(round(v))
-    if isinstance(v, str):
-        s = v.strip()
-        if s.startswith(("0x", "0X")):
-            return int(s, 16)
-        return int(s, 10)
-    return int(default)
-
-
-def _cfg_float(hw: dict, key: str, default: float) -> float:
-    v = hw.get(key, default)
-    if v is None:
-        return float(default)
+# ── DHT22 — Température / Humidité ───────────────────────────────────────────
+def read_dht22(pin: int):
+    """Retourne (temperature_C, humidity_pct) ou (None, None).
+    5 tentatives x 1.2 s -- DHT22 peut necessiter plusieurs secondes apres mise sous tension."""
     try:
-        return float(v)
-    except (TypeError, ValueError):
-        return float(default)
-
-
-def _cfg_bool(hw: dict, key: str, default: bool) -> bool:
-    v = hw.get(key, default)
-    if isinstance(v, bool):
-        return v
-    if isinstance(v, (int, float)):
-        return bool(int(v))
-    if v is None:
-        return bool(default)
-    s = str(v).strip().lower()
-    if s in ("1", "true", "yes", "oui", "on"):
-        return True
-    if s in ("0", "false", "no", "non", "off", ""):
-        return False
-    return bool(default)
-
-
-def _hardware_dict(cfg: dict) -> dict:
-    hw = cfg.get("hardware") or {}
-    return hw if isinstance(hw, dict) else {}
-
-
-def _normalize_firestore_room_id(room_id: str) -> str:
-    """Même ID que le document Firestore de la salle (collection rooms, id document ; le dashboard peut préfixer room-)."""
-    s = (room_id or "").strip()
-    low = s.lower()
-    if low.startswith("room-"):
-        rest = s[5:].strip()
-        return rest if rest else s
-    return s
-
-
-def _coerce_pir_sample(motion) -> int | None:
-    """0/1 pour la logique d’occupation ; None si valeur illisible (traité comme absence de signal mouvement)."""
-    if motion is None:
-        return None
-    if isinstance(motion, bool):
-        return int(motion)
-    try:
-        v = int(float(motion))
-        return 1 if v != 0 else 0
-    except (TypeError, ValueError):
-        return None
-
-
-def _pir_motion_from_line_high(line_is_high: bool, active_low: bool) -> int:
-    """Mouvement = 1 : ligne haute (logique positive) ou ligne basse si active_low."""
-    if active_low:
-        return int(not line_is_high)
-    return int(line_is_high)
-
-
-def _resolve_smbus_bus_number(preferred: int) -> int | None:
-    """Pi 4 : souvent i2c-1 — Pi 5 : souvent i2c-13 / i2c-14 selon image."""
-    seen = set()
-    order = [preferred, 1, 13, 14, 22, 0, 6, 20, 21]
-    for n in order:
-        if n in seen or n < 0:
-            continue
-        seen.add(n)
-        path = f"/dev/i2c-{n}"
-        if os.path.exists(path):
-            if n != preferred:
-                print("I2C: utilisation", path, "(config bh1750I2cBus était", preferred, ")", flush=True)
-            return n
-    print("I2C: aucun /dev/i2c-* — sudo raspi-config → Interface Options → I2C → Yes puis reboot", flush=True)
-    return None
-
-
-def _dht_normalize_pair(t, h):
-    if h is None or t is None:
-        return None, None
-    try:
-        t, h = float(t), float(h)
-        if h > 100 or h < 0 or t > 85 or t < -45:
-            t, h = h, t
-        return round(t, 1), round(h, 1)
-    except (TypeError, ValueError):
-        return None, None
-
-
-# Une seule instance DHT22 (Blinka / libgpiod) : recréer + deinit à chaque cycle laisse souvent la ligne GPIO
-# occupée (« Unable to set line N to input » au cycle suivant).
-_DHT22_CP_DEV = None
-_DHT22_CP_PIN = None
-
-
-def _read_dht22_circuitpython(gpio_pin: int):
-    """DHT22 via Blinka (Pi 5 / Bookworm) : board.D{n} (numéro BCM)."""
-    global _DHT22_CP_DEV, _DHT22_CP_PIN
-    try:
-        import board
         import adafruit_dht
-    except ImportError as e:
-        print(
-            "DHT22 CircuitPython: imports manquants (",
-            e,
-            ") — sur la Pi : /opt/room-sensor/venv/bin/pip install -U adafruit-blinka adafruit-circuitpython-dht puis redeploy/install.sh",
-            flush=True,
-        )
-        return None, None
-    pin = getattr(board, f"D{gpio_pin}", None)
-    if pin is None:
-        print("DHT22: board.D", gpio_pin, "inexistant — vérifier la broche BCM dans hardware.dht22Gpio", flush=True)
-        return None, None
-    if _DHT22_CP_PIN != gpio_pin and _DHT22_CP_DEV is not None:
-        try:
-            if hasattr(_DHT22_CP_DEV, "deinit"):
-                _DHT22_CP_DEV.deinit()
-        except Exception:
-            pass
-        _DHT22_CP_DEV = None
-        _DHT22_CP_PIN = None
-    if _DHT22_CP_DEV is None:
-        try:
-            _DHT22_CP_DEV = adafruit_dht.DHT22(pin)
-            _DHT22_CP_PIN = gpio_pin
-        except Exception as e:
-            print("DHT22 CircuitPython: ouverture GPIO", gpio_pin, e, flush=True)
-            _DHT22_CP_DEV = None
-            _DHT22_CP_PIN = None
-            return None, None
-    dev = _DHT22_CP_DEV
-    try:
-        t, h = None, None
-        for attempt in range(25):
-            time.sleep(0.1 if attempt else 0.25)
+        import board
+        sensor = adafruit_dht.DHT22(getattr(board, f'D{pin}'), use_pulseio=False)
+        for attempt in range(5):
             try:
-                t = dev.temperature
-                h = dev.humidity
-            except RuntimeError:
-                continue
-            if t is not None and h is not None:
-                break
-        out = _dht_normalize_pair(t, h)
-        if out[0] is None:
-            print("DHT22 CircuitPython: pas de mesure stable sur GPIO", gpio_pin, flush=True)
-        return out
+                temp = sensor.temperature
+                hum = sensor.humidity
+                if temp is not None and hum is not None:
+                    sensor.exit()
+                    return round(float(temp), 1), round(float(hum), 1)
+            except RuntimeError as e:
+                log.debug(f'DHT22 tentative {attempt + 1}/5 : {e}')
+            time.sleep(1.2)
+        sensor.exit()
+        log.warning(f'DHT22 pin {pin} : aucune lecture valide apres 5 tentatives')
     except Exception as e:
-        print("DHT22 CircuitPython:", e, flush=True)
-        try:
-            if _DHT22_CP_DEV is not None and hasattr(_DHT22_CP_DEV, "deinit"):
-                _DHT22_CP_DEV.deinit()
-        except Exception:
-            pass
-        _DHT22_CP_DEV = None
-        _DHT22_CP_PIN = None
-        return None, None
+        log.warning(f'DHT22 erreur pin {pin}: {e}')
+    return None, None
 
 
-def _read_dht22(gpio_pin: int):
-    """Température (°C) et humidité (%) ou (None, None) si capteur absent / illisible."""
-    try:
-        import Adafruit_DHT
-        try:
-            try:
-                h, t = Adafruit_DHT.read_retry(Adafruit_DHT.DHT22, gpio_pin, retries=20, delay_seconds=0.05)
-            except TypeError:
-                h, t = Adafruit_DHT.read_retry(Adafruit_DHT.DHT22, gpio_pin)
-        except Exception:
-            h, t = None, None
-        if h is not None and t is not None:
-            out = _dht_normalize_pair(t, h)
-            if out[0] is not None:
-                return out
-    except ImportError:
-        pass
-    except Exception as e:
-        print("DHT22 Adafruit_DHT:", e, flush=True)
-    out = _read_dht22_circuitpython(gpio_pin)
-    if out[0] is None:
-        print(
-            "DHT22: pas de mesure — venv : pip install -U adafruit-blinka adafruit-circuitpython-dht (ou install.sh sans erreur pip)",
-            flush=True,
-        )
-    return out
-
-
-def _co2_from_mhz19_bytes(high: int, low: int):
-    ppm = high * 256 + low
-    if 0 < ppm <= 5000:
-        return float(ppm)
-    ppm2 = low * 256 + high
-    if 0 < ppm2 <= 5000:
-        return float(ppm2)
-    return None
-
-
-def _read_co2_uart(serial_device: str):
-    """CO₂ ppm — MH-Z19 / clones : trame 0xFF 0x86 ou réponse à la commande de lecture gaz."""
-    if not serial_device:
-        return None
-    try:
-        import serial
-    except ImportError:
-        print("CO2: pip install pyserial", flush=True)
-        return None
-    ser = None
-    try:
-        ser = serial.Serial(
-            serial_device,
-            9600,
-            timeout=0.25,
-            write_timeout=0.5,
-            rtscts=False,
-            dsrdtr=False,
-            xonxoff=False,
-        )
-    except (OSError, ValueError, serial.SerialException) as e:
-        print("CO2 serial ouverture:", serial_device, e, flush=True)
-        return None
-    try:
-        try:
-            ser.reset_input_buffer()
-            ser.reset_output_buffer()
-        except Exception:
-            pass
-        # Commande lecture concentration (MH-Z19) — certains capteurs n’envoient rien sans requête
-        try:
-            ser.write(bytes([0xFF, 0x01, 0x86, 0x00, 0x00, 0x00, 0x00, 0x00, 0x79]))
-            time.sleep(0.15)
-        except Exception:
-            pass
-        for _ in range(24):
-            raw = ser.read(9)
-            if len(raw) != 9:
-                continue
-            if raw[0] == 0xFF and raw[1] == 0x86:
-                v = _co2_from_mhz19_bytes(raw[2], raw[3])
-                if v is not None:
-                    return v
-        return None
-    except Exception as e:
-        print("CO2 lecture:", e, flush=True)
-        return None
-    finally:
-        if ser is not None:
-            try:
-                ser.close()
-            except Exception:
-                pass
-
-
-def _lux_from_hi_lo(hi: int, lo: int):
-    lux = ((hi << 8) | lo) / 1.2
-    if lux < 0 or lux > 130_000:
-        lux = ((lo << 8) | hi) / 1.2
-    if lux < 0 or lux > 130_000:
-        return None
-    return round(float(lux), 1)
-
-
-def _read_bh1750_lux(i2c_bus_preferred: int, i2c_addr: int):
-    """GY-30 / BH1750FVI : lux ou None."""
-    i2c_bus = _resolve_smbus_bus_number(i2c_bus_preferred)
-    if i2c_bus is None:
-        return None
-    try:
-        import smbus2
-        from smbus2 import i2c_msg
-    except ImportError:
-        print("BH1750: installez smbus2 (pip install smbus2)", flush=True)
-        return None
-    addrs = []
-    for a in (i2c_addr, 0x23, 0x5C):
-        if 0 <= a <= 127 and a not in addrs:
-            addrs.append(a)
-    for addr in addrs:
-        try:
-            bus = smbus2.SMBus(i2c_bus)
-            bus.i2c_rdwr(i2c_msg.write(addr, [0x01]))
-            time.sleep(0.02)
-            bus.i2c_rdwr(i2c_msg.write(addr, [0x20]))
-            time.sleep(0.18)
-            rd = i2c_msg.read(addr, 2)
-            bus.i2c_rdwr(rd)
-            bb = bytes(rd)
-            if len(bb) != 2:
-                continue
-            lux = _lux_from_hi_lo(bb[0], bb[1])
-            if lux is not None:
-                return lux
-        except Exception as e:
-            print("BH1750 i2c_msg", hex(addr), e, flush=True)
-    try:
-        bus = smbus2.SMBus(i2c_bus)
-        for addr in addrs:
-            try:
-                bus.write_byte(addr, 0x01)
-                time.sleep(0.02)
-                bus.write_byte(addr, 0x10)
-                time.sleep(0.2)
-                hi = bus.read_byte(addr)
-                lo = bus.read_byte(addr)
-                lux = _lux_from_hi_lo(hi, lo)
-                if lux is not None:
-                    return lux
-            except Exception as e:
-                print("BH1750 read_byte", hex(addr), e, flush=True)
-    except Exception:
-        pass
-    return None
-
-
-def _sds011_checksum_ok(frame: bytes) -> bool:
-    if len(frame) != 10:
-        return False
-    if sum(frame[2:8]) % 256 == frame[8]:
-        return True
-    if sum(frame[1:8]) % 256 == frame[8]:
-        return True
-    return False
-
-
-def _try_parse_sds011_frame(frame: bytes):
-    if len(frame) != 10 or frame[0] != 0xAA or frame[9] != 0xAB:
-        return None
-    if frame[1] not in (0xC0, 0xC2):
-        return None
-    pm25 = ((frame[3] << 8) | frame[2]) / 10.0
-    pm10 = ((frame[5] << 8) | frame[4]) / 10.0
-    if not _sds011_checksum_ok(frame):
-        if not (0 <= pm25 <= 2000 and 0 <= pm10 <= 2000):
-            return None
-    if pm25 < 0 or pm25 > 2000 or pm10 < 0 or pm10 > 2000:
-        return None
-    return round(pm25, 1), round(pm10, 1)
-
-
-def _scan_sds011_buffer(buf: bytes):
-    for i in range(0, max(0, len(buf) - 9)):
-        if buf[i] != 0xAA:
-            continue
-        chunk = buf[i : i + 10]
-        if len(chunk) < 10:
-            continue
-        got = _try_parse_sds011_frame(chunk)
-        if got is not None:
-            return got
-    return None
-
-
-def _read_sds011_pm(serial_device: str):
-    """Nova SDS011 : (pm25_µg_m3, pm10_µg_m3) ou (None, None). UART 9600."""
-    if not serial_device:
-        return None, None
-    try:
-        import serial
-    except ImportError:
-        print("SDS011: pip install pyserial", flush=True)
-        return None, None
-    ser = None
-    try:
-        ser = serial.Serial(
-            serial_device,
-            9600,
-            bytesize=8,
-            parity="N",
-            stopbits=1,
-            timeout=0.3,
-            rtscts=False,
-            dsrdtr=False,
-            xonxoff=False,
-        )
-        try:
-            ser.reset_input_buffer()
-        except Exception:
-            pass
-
-        def read_phase(send_passive: bool):
-            if send_passive:
-                try:
-                    q = bytes(
-                        [
-                            0xAA,
-                            0xB4,
-                            0x06,
-                            0x01,
-                            0x01,
-                            0x00,
-                            0x00,
-                            0x00,
-                            0x00,
-                            0x00,
-                            0x00,
-                            0x00,
-                            0x00,
-                            0x00,
-                            0x00,
-                            0xFF,
-                            0xFF,
-                            0x02,
-                            0xAB,
-                        ]
-                    )
-                    ser.write(q)
-                    time.sleep(0.25)
-                except Exception:
-                    pass
-            end = time.time() + 3.5
-            acc = bytearray()
-            while time.time() < end:
-                block = ser.read(128)
-                if not block:
-                    time.sleep(0.05)
-                    continue
-                acc.extend(block)
-                if len(acc) > 2000:
-                    del acc[:-500]
-                got = _scan_sds011_buffer(bytes(acc))
-                if got is not None:
-                    return got
-            return _scan_sds011_buffer(bytes(acc))
-
-        got = read_phase(False)
-        if got is not None:
-            return got
-        got = read_phase(True)
-        if got is not None:
-            return got
-        print("SDS011: aucune trame valide sur", serial_device, flush=True)
-        return None, None
-    except Exception as e:
-        print("SDS011:", serial_device, e, flush=True)
-        return None, None
-    finally:
-        if ser is not None:
-            try:
-                ser.close()
-            except Exception:
-                pass
-
-
-def _mcp3008_samples(bus: int, device: int, channel: int, count: int):
-    """Liste d’échantillons ADC 0–1023 ou None."""
-    if count < 8 or not (0 <= channel <= 7):
-        return None
-    try:
-        import spidev
-    except ImportError:
-        print("MCP3008: pip install spidev", flush=True)
-        return None
-    spi = spidev.SpiDev()
-    try:
-        spi.open(bus, device)
-        spi.max_speed_hz = 1_350_000
-        cmd = 0b11000000 | ((channel & 0x04) << 4) | ((channel & 0x03) << 6)
-        samples = []
-        for _ in range(count):
-            resp = spi.xfer2([1, cmd, 0])
-            adc = ((resp[1] & 0x0F) << 8) | resp[2]
-            samples.append(int(adc))
-        return samples
-    except Exception:
-        return None
-    finally:
-        try:
-            spi.close()
-        except Exception:
-            pass
-
-
-def _read_max9814_noise_db(
-    bus: int,
-    device: int,
-    channel: int,
-    sample_count: int,
-    gain: float,
-    floor_db: float,
-):
+# ── BH1750 — Lumière (lux) via I2C brut (5 broches : SDA/SCL/ADDR/VCC/GND) ──
+def read_bh1750(addr: int = 0x23, preferred_bus: int = 1):
     """
-    MAX9814 sur entrée analogique MCP3008 : niveau sonore approximatif (dB) à partir du signal réel.
-    Étalonnez gain / floor via hardware (max9814NoiseGain, max9814NoiseFloorDb).
+    Lit le BH1750 (GY-30/BH1750FVI) en testant tous les bus I2C disponibles.
+    Utilise i2c_msg pour un transfert I2C brut (pas SMBus register protocol).
     """
-    samples = _mcp3008_samples(bus, device, channel, sample_count)
-    if not samples:
-        return None
-    mean = sum(samples) / len(samples)
-    var = sum((s - mean) ** 2 for s in samples) / max(1, len(samples) - 1)
-    rms = math.sqrt(max(0.0, var))
-    if var < 1e-8:
-        return None
-    if rms < 0.08:
-        return None
-    db = floor_db + gain * rms
-    db = max(30.0, min(120.0, db))
-    return round(db, 1)
-
-
-_PIR_GPIO_READY = False
-_PIR_CONFIGURED_PINS = set()
-# Broche BCM -> (pirPullUp, pirActiveLow) au moment du GPIO.setup ; si ça change, on refait cleanup.
-_PIR_SETUP_OPTS = {}
-_PIR_LGPIO_IMPORT_WARNED = False
-# Dernier gpiochip (/dev/gpiochipN) où gpio_claim_input a réussi pour le PIR (Pi 5 : N varie selon le noyau).
-_PIR_LGPIO_CHIP = None
-_PIR_LGPIO_FAIL_MSG_SENT = False
-
-
-def _read_pir_lgpio(gpio_pin: int, preferred_gpiochip=None):
-    """PIR via lgpio — Pi 5 : le bon gpiochip n’est pas toujours 0 ; il faut réussir gpio_claim_input (BCM = offset ligne)."""
-    global _PIR_LGPIO_IMPORT_WARNED, _PIR_LGPIO_CHIP, _PIR_LGPIO_FAIL_MSG_SENT
     try:
-        import lgpio
+        from smbus2 import SMBus, i2c_msg
     except ImportError:
-        if not _PIR_LGPIO_IMPORT_WARNED:
-            _PIR_LGPIO_IMPORT_WARNED = True
-            print(
-                "PIR: module « lgpio » introuvable — apt: sudo apt install python3-lgpio ; venv: pip install lgpio OU recréer le venv avec --system-site-packages (install.sh)",
-                flush=True,
-            )
+        log.warning('smbus2 non installe -- BH1750 ignore')
         return None
-    chips = []
-    env_chip = os.environ.get("ROOM_SENSOR_PIR_GPIOCHIP", "").strip()
-    if env_chip.isdigit():
-        chips.append(int(env_chip))
-    if preferred_gpiochip is not None:
+
+    try:
+        all_buses = sorted(int(p.split('-')[-1]) for p in glob.glob('/dev/i2c-*'))
+    except Exception:
+        all_buses = [preferred_bus]
+
+    buses = [preferred_bus] + [b for b in all_buses if b != preferred_bus]
+
+    for bus_num in buses:
         try:
-            pc = int(preferred_gpiochip)
-            if pc >= 0 and pc not in chips:
-                chips.append(pc)
-        except (TypeError, ValueError):
-            pass
-    if _PIR_LGPIO_CHIP is not None and _PIR_LGPIO_CHIP not in chips:
-        chips.append(_PIR_LGPIO_CHIP)
-    for c in (0, 4, 3, 2, 1, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15):
-        if c not in chips:
-            chips.append(c)
-    last_err = None
-    flag_opts = [0]
-    for attr in ("SET_PULL_UP", "SET_PULL_DOWN"):
-        fv = getattr(lgpio, attr, None)
-        if fv is not None and isinstance(fv, int) and fv not in flag_opts:
-            flag_opts.append(fv)
-    for chip in chips:
-        h = lgpio.gpiochip_open(chip)
-        if h < 0:
-            continue
-        claimed = False
-        try:
-            st = -1
-            for flags in flag_opts:
-                st = lgpio.gpio_claim_input(h, gpio_pin, flags)
-                if st >= 0:
-                    claimed = True
-                    break
-                last_err = st
-            if not claimed:
-                try:
-                    lgpio.gpiochip_close(h)
-                except Exception:
-                    pass
-                continue
-            time.sleep(0.03)
-            v = lgpio.gpio_read(h, gpio_pin)
-            try:
-                lgpio.gpio_free(h, gpio_pin)
-            except Exception:
-                pass
-            try:
-                lgpio.gpiochip_close(h)
-            except Exception:
-                pass
-            if v < 0:
-                last_err = v
-                continue
-            _PIR_LGPIO_CHIP = chip
-            _PIR_LGPIO_FAIL_MSG_SENT = False
-            return int(v)
+            with SMBus(bus_num) as bus:
+                bus.write_byte(addr, 0x01)   # POWER_ON
+                bus.write_byte(addr, 0x10)   # Continuously H-Res Mode 1
+                time.sleep(0.18)
+                read_msg = i2c_msg.read(addr, 2)
+                bus.i2c_rdwr(read_msg)
+                data = list(read_msg)
+            lux = ((data[0] << 8) | data[1]) / 1.2
+            log.info(f'BH1750 detecte -- bus I2C {bus_num} (/dev/i2c-{bus_num})')
+            return round(lux, 1)
         except Exception as e:
-            last_err = e
-            print("PIR lgpio gpiochip", chip, ":", e, flush=True)
-            if claimed:
-                try:
-                    lgpio.gpio_free(h, gpio_pin)
-                except Exception:
-                    pass
-            try:
-                lgpio.gpiochip_close(h)
-            except Exception:
-                pass
-            continue
-    if last_err is not None and not _PIR_LGPIO_FAIL_MSG_SENT:
-        _PIR_LGPIO_FAIL_MSG_SENT = True
-        print(
-            "PIR lgpio: aucun gpiochip n’a accepté GPIO BCM",
-            gpio_pin,
-            "(dernier code/erreur:",
-            last_err,
-            ") — sur la Pi : gpiodetect ; puis export ROOM_SENSOR_PIR_GPIOCHIP=N dans l’unité systemd si besoin.",
-            flush=True,
-        )
-    _PIR_LGPIO_CHIP = None
+            log.debug(f'BH1750 bus {bus_num}: {e}')
+
+    log.warning(f'BH1750 non trouve -- buses testes : {buses}')
     return None
 
 
-_PIR_BACKEND_LOGGED = ""
-# Une seule instance DigitalInputDevice (tuto gpiozero : motion_sensor = DigitalInputDevice(23) puis is_active en boucle).
-_PIR_GPIOZERO_DEV = None
-_PIR_GPIOZERO_KEY = None
-_PIR_GPIOZERO_LAST_LOG = None
-# gpiozero très ancien : pas de kw active_high sur DigitalInputDevice → on inverse is_active si pirActiveLow.
-_PIR_GPIOZERO_INVERT = False
-
-
-def _close_pir_gpiozero_if_open():
-    global _PIR_GPIOZERO_DEV, _PIR_GPIOZERO_KEY, _PIR_GPIOZERO_LAST_LOG, _PIR_GPIOZERO_INVERT
-    if _PIR_GPIOZERO_DEV is not None:
-        try:
-            _PIR_GPIOZERO_DEV.close()
-        except Exception:
-            pass
-    _PIR_GPIOZERO_DEV = None
-    _PIR_GPIOZERO_KEY = None
-    _PIR_GPIOZERO_LAST_LOG = None
-    _PIR_GPIOZERO_INVERT = False
-
-
-def _get_pir_gpiozero_device(gpio_pin: int, internal_pull_up: bool, active_low: bool):
-    """Ouvre une fois DigitalInputDevice ; lectures suivantes = motion_sensor.is_active (sans close à chaque cycle)."""
-    global _PIR_GPIOZERO_DEV, _PIR_GPIOZERO_KEY, _PIR_BACKEND_LOGGED, _PIR_GPIOZERO_INVERT
-    import os as _os_gz
-
-    _os_gz.environ.setdefault("GPIOZERO_PIN_FACTORY", "lgpio")
-    try:
-        from gpiozero import DigitalInputDevice
-    except ImportError:
-        return None
-    key = (gpio_pin, bool(internal_pull_up), bool(active_low))
-    if _PIR_GPIOZERO_DEV is not None and _PIR_GPIOZERO_KEY == key:
-        return _PIR_GPIOZERO_DEV
-    _close_pir_gpiozero_if_open()
-    pull_order = (True, False) if internal_pull_up else (False, True)
-    last_err = None
-    for pull_up in pull_order:
-        dev = None
-        try:
-            try:
-                dev = DigitalInputDevice(gpio_pin, pull_up=pull_up, active_high=not active_low)
-                _PIR_GPIOZERO_INVERT = False
-            except TypeError:
-                # gpiozero ancien (ex. image Raspberry) : pas d’argument active_high.
-                dev = DigitalInputDevice(gpio_pin, pull_up=pull_up)
-                _PIR_GPIOZERO_INVERT = bool(active_low)
-            time.sleep(0.05)
-            _PIR_GPIOZERO_DEV = dev
-            _PIR_GPIOZERO_KEY = key
-            if _PIR_BACKEND_LOGGED != "gpiozero":
-                _PIR_BACKEND_LOGGED = "gpiozero"
-                ah = "logiciel pirActiveLow" if _PIR_GPIOZERO_INVERT else str(not active_low)
-                print(
-                    "PIR: gpiozero DigitalInputDevice(BCM"
-                    + str(gpio_pin)
-                    + ") persistant — active_high="
-                    + ah
-                    + " pull_up="
-                    + str(pull_up)
-                    + " (exemple: while True: motion_sensor.is_active)",
-                    flush=True,
-                )
-            return _PIR_GPIOZERO_DEV
-        except Exception as e:
-            last_err = e
-            if dev is not None:
-                try:
-                    dev.close()
-                except Exception:
-                    pass
-                dev = None
-            continue
-    if last_err is not None:
-        print("PIR gpiozero:", last_err, flush=True)
-    return None
-
-
-def _read_pir_gpiozero_motion(gpio_pin: int, internal_pull_up: bool, active_low: bool):
-    """0/1 depuis is_active ; log seulement si l’état change (évite spam si poll 0.5 s)."""
-    global _PIR_GPIOZERO_LAST_LOG
-    dev = _get_pir_gpiozero_device(gpio_pin, internal_pull_up, active_low)
-    if dev is None:
-        return None
-    raw = int(bool(dev.is_active))
-    saw = (1 - raw) if _PIR_GPIOZERO_INVERT else raw
-    if _PIR_GPIOZERO_LAST_LOG != saw:
-        _PIR_GPIOZERO_LAST_LOG = saw
-        print(
-            "PIR gpiozero: is_active="
-            + str(saw)
-            + " -> "
-            + ("Somebody here!" if saw else "Monitoring..."),
-            flush=True,
-        )
-    return saw
-
-
-def _read_pir_motion(
-    gpio_pin: int,
-    preferred_gpiochip=None,
-    internal_pull_up: bool = False,
-    active_low: bool = False,
-    sample_ms: int = 450,
-    motion_min_frac: float = 0.72,
-    prefer_gpiozero: bool = True,
-):
-    """PIR HC-SR501 : lecture digitale brute HIGH/LOW (Arduino). Par défaut gpiozero en premier (exemples Raspberry)."""
-    global _PIR_GPIO_READY, _PIR_BACKEND_LOGGED, _PIR_CONFIGURED_PINS, _PIR_SETUP_OPTS
-    sample_ms = max(0, min(2000, int(sample_ms)))
-    _ = motion_min_frac
-    settle_s = min(0.2, sample_ms / 1000.0) if sample_ms > 0 else 0.0
-
-    if prefer_gpiozero:
-        gz = _read_pir_gpiozero_motion(gpio_pin, internal_pull_up, active_low)
-        if gz is not None:
-            return gz
-    else:
-        _close_pir_gpiozero_if_open()
-
+# ── Capteur lumière analogique 3 broches (OUT, GND, VCC) ─────────────────────
+def read_analog_light_sensor(pin: int = 27):
+    """
+    Lit la sortie numerique d'un capteur lumiere 3 broches (comparateur LDR).
+    GPIO.setmode() doit deja avoir ete appele par init_gpio() avant cette fonction.
+    HIGH quand lumineux, LOW quand sombre (modules LM393 standard).
+    """
     try:
         import RPi.GPIO as GPIO
+        # Pas de setmode ici -- gere par init_gpio() au demarrage
+        GPIO.setup(pin, GPIO.IN, pull_up_down=GPIO.PUD_DOWN)
+        value = GPIO.input(pin)
+        log.info(f'Capteur lumiere GPIO {pin} = {"HIGH (claire)" if value else "LOW (sombre)"}')
+        return 100.0 if value else 0.0
+    except Exception as e:
+        log.warning(f'Capteur lumiere analogique erreur GPIO {pin}: {e}')
+        return None
 
-        try:
-            opt = (internal_pull_up, active_low)
-            if gpio_pin in _PIR_CONFIGURED_PINS and _PIR_SETUP_OPTS.get(gpio_pin) != opt:
-                try:
-                    GPIO.cleanup()
-                except Exception:
-                    pass
-                _PIR_GPIO_READY = False
-                _PIR_CONFIGURED_PINS.clear()
-                _PIR_SETUP_OPTS.clear()
-            if not _PIR_GPIO_READY:
-                GPIO.setmode(GPIO.BCM)
-                GPIO.setwarnings(False)
-                _PIR_GPIO_READY = True
-            if gpio_pin not in _PIR_CONFIGURED_PINS:
-                pud = GPIO.PUD_UP if internal_pull_up else GPIO.PUD_OFF
-                GPIO.setup(gpio_pin, GPIO.IN, pull_up_down=pud)
-                _PIR_CONFIGURED_PINS.add(gpio_pin)
-                _PIR_SETUP_OPTS[gpio_pin] = opt
-            if settle_s > 0:
-                time.sleep(settle_s)
-            line_hi = GPIO.input(gpio_pin) == GPIO.HIGH
-            saw = _pir_motion_from_line_high(line_hi, active_low)
-            print("PIR: lecture brute RPi.GPIO ->", saw, "(HIGH=" + str(line_hi) + ")", flush=True)
-            if _PIR_BACKEND_LOGGED != "RPi.GPIO":
-                _PIR_BACKEND_LOGGED = "RPi.GPIO"
-                print(
-                    "PIR: backend RPi.GPIO (BCM "
-                    + str(gpio_pin)
-                    + ") lecture directe (attente "
-                    + str(sample_ms)
-                    + " ms) — actif bas: "
-                    + str(active_low)
-                    + " — pull interne: "
-                    + str(internal_pull_up),
-                    flush=True,
-                )
-            return saw
-        except Exception as e:
-            print("PIR RPi.GPIO:", e, flush=True)
-    except ImportError:
+
+# ── INMP441 I2S — Niveau sonore 0-100 via arecord ────────────────────────────
+def read_inmp441_level(device: str = 'hw:1,0', duration: float = 1.0,
+                       samplerate: int = 16000):
+    """
+    Lit le niveau sonore INMP441 via arecord. Essaie 7 configs (plughw/hw, mono/stereo,
+    S16/S32, taux 16k/44.1k/48k) pour contourner les contraintes du driver I2S.
+    Retourne un niveau 0-100 (log-RMS) ou None.
+    """
+    tmp = '/tmp/smartroom_noise.wav'
+    try:
+        alsa_dev = device if device and device != 'disabled' else 'default'
+        plug_dev = ('plughw:' + alsa_dev[3:]) if alsa_dev.startswith('hw:') else alsa_dev
+        configs = [
+            (plug_dev, 1, 'S16_LE', samplerate),
+            (plug_dev, 2, 'S32_LE', samplerate),
+            (plug_dev, 1, 'S32_LE', samplerate),
+            (plug_dev, 2, 'S32_LE', 44100),
+            (plug_dev, 2, 'S32_LE', 48000),
+            (alsa_dev, 2, 'S32_LE', samplerate),
+            (alsa_dev, 1, 'S32_LE', samplerate),
+        ]
+        last_err = ''
+        for (dev, channels, fmt, rate) in configs:
+            try: os.unlink(tmp)
+            except Exception: pass
+            result = subprocess.run(
+                ['arecord', '-D', dev, f'-r{rate}', f'-c{channels}',
+                 f'-f{fmt}', f'-d{max(1, int(math.ceil(duration)))}', '-q', tmp],
+                capture_output=True, timeout=duration + 6,
+            )
+            if result.returncode == 0 and os.path.exists(tmp):
+                log.debug(f'INMP441 config OK: {dev} {channels}ch {fmt} {rate}Hz')
+                break
+            last_err = result.stderr.decode(errors='replace').strip()
+        else:
+            log.warning(f'INMP441 arecord echec toutes configs (device={alsa_dev}): {last_err}')
+            return None
+
+        with wave.open(tmp, 'rb') as wf:
+            raw = wf.readframes(wf.getnframes())
+            n_channels = wf.getnchannels()
+            sampwidth = wf.getsampwidth()
+
+        if sampwidth == 2:
+            fmt_char, FLOOR, CEILING = 'h', 2_000, 30_000
+        else:
+            fmt_char, FLOOR, CEILING = 'i', 50_000, 500_000_000
+
+        n_words = len(raw) // sampwidth
+        if n_words == 0:
+            log.warning('INMP441 : aucun sample capture')
+            return None
+
+        samples = struct.unpack(f'<{n_words}{fmt_char}', raw)
+        if n_channels > 1:
+            samples = samples[::n_channels]   # canal gauche uniquement
+
+        rms = math.sqrt(sum(s * s for s in samples) / len(samples))
+        if rms <= FLOOR:
+            return 5.0
+
+        log_min = math.log10(FLOOR)
+        log_max = math.log10(CEILING)
+        log_val = math.log10(min(float(rms), CEILING))
+        level = (log_val - log_min) / (log_max - log_min) * 100.0
+        return round(min(100.0, max(0.0, level)), 1)
+
+    except subprocess.TimeoutExpired:
+        log.warning('INMP441 : timeout arecord')
+        return None
+    except Exception as e:
+        log.warning(f'INMP441 erreur: {e}')
+        return None
+    finally:
+        try: os.unlink(tmp)
+        except Exception: pass
+
+
+def _find_inmp441_device() -> str:
+    """Parcourt les cartes ALSA pour trouver la carte I2S. Retourne 'hw:N,0' ou 'hw:1,0'."""
+    try:
+        result = subprocess.run(['arecord', '-l'], capture_output=True, text=True, timeout=5)
+        for line in result.stdout.splitlines():
+            low = line.lower()
+            if any(k in low for k in ('i2s', 'mems', 'inmp', 'rpi-i2s', 'adau')):
+                import re
+                m = re.search(r'card\s+(\d+)', line, re.IGNORECASE)
+                if m:
+                    dev = f"hw:{m.group(1)},0"
+                    log.info(f'INMP441 auto-detecte : {dev} -- {line.strip()}')
+                    return dev
+    except Exception:
         pass
-
-    if settle_s > 0:
-        time.sleep(settle_s)
-    rv = _read_pir_lgpio(gpio_pin, preferred_gpiochip)
-    if rv is not None:
-        if _PIR_BACKEND_LOGGED != "lgpio":
-            _PIR_BACKEND_LOGGED = "lgpio"
-            print(
-                "PIR: backend lgpio (BCM",
-                gpio_pin,
-                ") lecture directe (attente",
-                sample_ms,
-                "ms)",
-                flush=True,
-            )
-        saw_lg = _pir_motion_from_line_high(bool(int(rv)), active_low)
-        print("PIR lgpio: lecture brute ->", saw_lg, "(raw=" + str(rv) + ")", flush=True)
-        return saw_lg
-
-    if not prefer_gpiozero:
-        gz2 = _read_pir_gpiozero_motion(gpio_pin, internal_pull_up, active_low)
-        if gz2 is not None:
-            return gz2
-    return None
+    log.info('INMP441 : peripherique non auto-detecte, utilisation de hw:1,0')
+    return 'hw:1,0'
 
 
-def read_sensors(cfg: dict) -> tuple[dict, int | None]:
-    """
-    Lit uniquement le matériel détectable. Retourne (valeurs pour measurements sans motion, lecture PIR 0/1 ou None).
-    Chaque clé absente ou illisible → None (Firestore null).
-    Ne lève pas d’exception : en cas d’erreur de config ou matériel, retourne des null pour ne pas bloquer l’envoi.
-    """
-    empty = {
-        "temperature": None,
-        "humidity": None,
-        "co2": None,
-        "noise": None,
-        "light": None,
-        "pm25": None,
-        "pm10": None,
-    }
+# ── SDS011 — PM2.5 / PM10 ────────────────────────────────────────────────────
+def read_sds011(port: str = "/dev/ttyUSB0"):
+    """Retourne (pm25, pm10) en µg/m³ ou (None, None)."""
     try:
-        hw = cfg.get("hardware") or {}
-        if not isinstance(hw, dict):
-            hw = {}
-        dht_pin = _cfg_int(hw, "dht22Gpio", 4)
-        pir_pin = _cfg_int(hw, "pirGpio", 23)
-        pir_gpiochip = hw.get("pirGpioChip")
-        pir_chip_opt = None
-        if pir_gpiochip is not None:
-            try:
-                pir_chip_opt = int(pir_gpiochip)
-            except (TypeError, ValueError):
-                pir_chip_opt = None
-            if pir_chip_opt is not None and pir_chip_opt < 0:
-                pir_chip_opt = None
-        pir_internal_pull = _cfg_bool(hw, "pirPullUp", False)
-        pir_active_low = _cfg_bool(hw, "pirActiveLow", False)
-        pir_sample_ms = max(50, min(2000, _cfg_int(hw, "pirSampleMs", 700)))
-        pir_motion_min_frac = max(0.0, min(1.0, _cfg_float(hw, "pirMotionMinFrac", 0.72)))
-        pir_prefer_gpiozero = _cfg_bool(hw, "pirPreferGpiozero", True)
-        i2c_bus = _cfg_int(hw, "bh1750I2cBus", 1)
-        i2c_addr = _cfg_int(hw, "bh1750I2cAddr", 0x23)
-        sds_dev = str(hw.get("sds011SerialDevice") or "/dev/ttyUSB0")
-        co2_dev = str(hw.get("co2SerialDevice") or "/dev/serial0")
-        spi_bus = _cfg_int(hw, "mcp3008SpiBus", 0)
-        spi_dev = _cfg_int(hw, "mcp3008SpiDevice", 0)
-        mic_ch = _cfg_int(hw, "max9814McpChannel", 0)
-        mic_n = max(8, _cfg_int(hw, "max9814SampleCount", 400))
-        mic_gain = _cfg_float(hw, "max9814NoiseGain", 0.09)
-        mic_floor = _cfg_float(hw, "max9814NoiseFloorDb", 34.0)
-
-        temperature, humidity = _read_dht22(dht_pin)
-        light = _read_bh1750_lux(i2c_bus, i2c_addr)
-        pm25, pm10 = _read_sds011_pm(sds_dev)
-        co2 = _read_co2_uart(co2_dev)
-        noise = _read_max9814_noise_db(spi_bus, spi_dev, mic_ch, mic_n, mic_gain, mic_floor)
-        if dht_pin == pir_pin:
-            print(
-                "hardware: dht22Gpio == pirGpio (",
-                dht_pin,
-                ") — une seule ligne ; motion ignoré (changez pirGpio dans agent_config.json).",
-                flush=True,
-            )
-            motion = None
-        else:
-            motion = _read_pir_motion(
-                pir_pin,
-                pir_chip_opt,
-                pir_internal_pull,
-                pir_active_low,
-                pir_sample_ms,
-                pir_motion_min_frac,
-                pir_prefer_gpiozero,
-            )
-
-        out = {
-            "temperature": temperature,
-            "humidity": humidity,
-            "co2": co2,
-            "noise": noise,
-            "light": light,
-            "pm25": pm25,
-            "pm10": pm10,
-        }
-        non_null = {k: v for k, v in out.items() if v is not None}
-        print(
-            "capteurs OK:",
-            non_null if non_null else "(tous null)",
-            "| pir (occupancy only):",
-            motion,
-            flush=True,
-        )
-        return out, motion
+        import serial
+        ser = serial.Serial(port, baudrate=9600, timeout=2)
+        ser.flushInput()
+        time.sleep(1)
+        raw = ser.read(10)
+        ser.close()
+        if len(raw) == 10 and raw[0] == 0xAA and raw[9] == 0xAB:
+            pm25 = round(((raw[3] << 8) | raw[2]) / 10.0, 1)
+            pm10 = round(((raw[5] << 8) | raw[4]) / 10.0, 1)
+            return pm25, pm10
     except Exception as e:
-        import traceback
-
-        print("read_sensors:", e, flush=True)
-        traceback.print_exc()
-        return dict(empty), None
+        log.warning(f"SDS011 erreur: {e}")
+    return None, None
 
 
-def poll_pir_motion_only(cfg: dict):
-    """Lit uniquement le PIR pour l’occupation (entre deux cycles complets). None si désactivé ou conflit broche DHT."""
-    hw = _hardware_dict(cfg)
-    if not _cfg_bool(hw, "syncRoomOccupancyFromPir", True):
-        return None
-    dht_pin = _cfg_int(hw, "dht22Gpio", 4)
-    pir_pin = _cfg_int(hw, "pirGpio", 23)
-    if dht_pin == pir_pin:
-        return None
-    pir_gpiochip = hw.get("pirGpioChip")
-    pir_chip_opt = None
-    if pir_gpiochip is not None:
-        try:
-            pir_chip_opt = int(pir_gpiochip)
-        except (TypeError, ValueError):
-            pir_chip_opt = None
-        if pir_chip_opt is not None and pir_chip_opt < 0:
-            pir_chip_opt = None
-    pir_internal_pull = _cfg_bool(hw, "pirPullUp", False)
-    pir_active_low = _cfg_bool(hw, "pirActiveLow", False)
-    pir_sample_ms = max(50, min(2000, _cfg_int(hw, "pirSampleMs", 700)))
-    pir_motion_min_frac = max(0.0, min(1.0, _cfg_float(hw, "pirMotionMinFrac", 0.72)))
-    pir_prefer_gpiozero = _cfg_bool(hw, "pirPreferGpiozero", True)
-    return _read_pir_motion(
-        pir_pin,
-        pir_chip_opt,
-        pir_internal_pull,
-        pir_active_low,
-        pir_sample_ms,
-        pir_motion_min_frac,
-        pir_prefer_gpiozero,
-    )
-
-
-def _trigger_systemd_service_restart():
-    """Relance l’unité systemd (install.sh + sudoers NOPASSWD pour pi)."""
+# ── GPIO — Initialisation unique ─────────────────────────────────────────────
+def init_gpio():
+    """Initialise RPi.GPIO en mode BCM une seule fois. Doit etre appelee avant
+    setup_pir() et read_analog_light_sensor() pour eviter les conflits setmode."""
     try:
-        subprocess.Popen(
-            ["/usr/bin/sudo", "-n", "/usr/bin/systemctl", "restart", "room-sensor-agent"],
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            start_new_session=True,
-        )
+        import RPi.GPIO as GPIO
+        GPIO.setwarnings(False)
+        GPIO.setmode(GPIO.BCM)
+        log.info('GPIO initialise (BCM)')
     except Exception as e:
-        print("serviceRestartRequestedAt: lancement systemctl:", e, flush=True)
+        log.warning(f'GPIO init erreur: {e}')
 
 
-def push_measurement(db, room_id: str, values: dict):
-    rid = _normalize_firestore_room_id(room_id)
-    if not rid:
-        print("push_measurement: roomId vide après normalisation — ignoré.", flush=True)
-        return
-    now = datetime.now(timezone.utc)
-    ts_ms = int(now.timestamp() * 1000)
-    doc_id = measurement_doc_id(ts_ms)
-    mref = db.collection("rooms").document(rid).collection("measurements").document(doc_id)
+# ── PIR — Détection de mouvement (polling direct, sans callback) ──────────────
+def setup_pir(pin: int):
+    """Configure le GPIO PIR en entree avec resistance pull-down interne.
+    Sans PUD_DOWN la broche flotte a HIGH quand le capteur est inactif -> faux positifs."""
+    try:
+        import RPi.GPIO as GPIO
+        GPIO.setup(pin, GPIO.IN, pull_up_down=GPIO.PUD_DOWN)
+        log.info(f'PIR configure -- GPIO {pin} (polling, PUD_DOWN)')
+    except Exception as e:
+        log.warning(f'PIR setup erreur: {e}')
+
+
+def is_pir_active(pin: int) -> bool:
+    """Lit directement l etat GPIO du PIR -- HIGH = mouvement detecte."""
+    try:
+        import RPi.GPIO as GPIO
+        return bool(GPIO.input(pin))
+    except Exception:
+        return False
+
+
+# ── Firestore ─────────────────────────────────────────────────────────────────
+def create_noise_alert(db, room_name: str, noise_level: float,
+                       loud_threshold: float = 65.0):
+    """
+    Crée une alerte bruit dans Firestore si aucune alerte ouverte n'existe déjà.
+    type='critical' si fort (≥ loud_threshold), sinon 'warning'.
+    """
+    try:
+        existing = db.collection("alerts")\
+            .where("category", "==", "Bruit")\
+            .where("room", "==", room_name)\
+            .where("status", "==", "open")\
+            .limit(1).get()
+        if existing:
+            return  # Alerte déjà ouverte — ne pas spammer
+        label = "Fort" if noise_level >= loud_threshold else "Moyen"
+        alert_type = "critical" if noise_level >= loud_threshold else "warning"
+        db.collection("alerts").add({
+            "type": alert_type,
+            "room": room_name,
+            "title": f"Niveau sonore élevé — {room_name}",
+            "message": f"Niveau sonore {int(noise_level)}/100 ({label}) détecté par INMP441. Vérifier la source de bruit.",
+            "category": "Bruit",
+            "status": "open",
+            "createdAt": firestore.SERVER_TIMESTAMP,
+            "updatedAt": firestore.SERVER_TIMESTAMP,
+        })
+        log.info(f"Alerte bruit créée → {room_name} niveau {int(noise_level)}/100 ({label})")
+    except Exception as e:
+        log.warning(f"Erreur création alerte bruit: {e}")
+
+
+def write_measurement(db, room_id: str, data: dict):
+    # ID base sur le timestamp (16 chiffres ms zero-padded) -- identique au format dashboard.
+    # Garantit un seul document par cycle sans collision avec les ecritures du frontend.
+    doc_id = str(int(time.time() * 1000)).zfill(16)
     payload = {
-        "timestamp": now,
-        "temperature": values.get("temperature"),
-        "humidity": values.get("humidity"),
-        "co2": values.get("co2"),
-        "noise": values.get("noise"),
-        "light": values.get("light"),
-        "pm25": values.get("pm25"),
-        "pm10": values.get("pm10"),
+        'timestamp': firestore.SERVER_TIMESTAMP,
+        **data,   # inclut toutes les cles, meme null -- schema constant
     }
-    mref.set(payload)
+    db.collection('rooms').document(room_id).collection('measurements').document(doc_id).set(payload)
+    log.info(f'Firestore -> room {room_id} [{doc_id}] : {data}')
 
 
-_PIR_LAST_MOTION_WALL = None
-_PUBLISHED_PIR_OCCUPANCY = None
-# Dernier échantillon PIR coercé (0/1) : pour détecter un **nouveau** mouvement (0→1) et forcer l’écriture Firestore tout de suite.
-_PREV_PIR_MOTION_COERCED = None
-# Dernier instant où un « pic » mouvement a été accepté pour le cooldown (réduit sensibilité / rafales).
-_PIR_LAST_DEBOUNCED_MOTION_ACCEPT = None
+def update_motion(db, room_id: str):
+    """Marque la salle occupee (occupancy=1) des detection de mouvement."""
+    db.collection('rooms').document(room_id).update({
+        'lastMotionAt': firestore.SERVER_TIMESTAMP,
+        'occupancy': 1,
+    })
+    log.info(f'Mouvement detecte -> room {room_id} occupee')
 
 
-def sync_room_occupancy_from_pir(db, room_id: str, cfg: dict, motion):
-    """
-    Mouvement détecté (m=1) → occupancy=1 **immédiatement** (aucune attente pirVacancyMinutes).
-    Plus aucun m=1 pendant pirVacancyMinutes après la dernière détection → occupancy=0 libre.
-    pirMotionCooldownSeconds : ne rafraîchit le « dernier mouvement » (horloge vacance) qu’au plus une fois
-    par ce délai si la ligne reste à 1 (équivalent tuto RPi.GPIO : if input and time-last > delay).
-    """
-    global _PIR_LAST_MOTION_WALL, _PUBLISHED_PIR_OCCUPANCY, _PREV_PIR_MOTION_COERCED, _PIR_LAST_DEBOUNCED_MOTION_ACCEPT
-    rid = _normalize_firestore_room_id(room_id)
-    if not rid:
-        return
-    hw = cfg.get("hardware") or {}
-    if not isinstance(hw, dict):
-        hw = {}
-    if not _cfg_bool(hw, "syncRoomOccupancyFromPir", True):
-        return
-    vac_min = max(1, min(180, _cfg_int(hw, "pirVacancyMinutes", 1)))
-    vac_s = float(vac_min) * 60.0
-    cooldown_s = max(0.5, min(120.0, _cfg_float(hw, "pirMotionCooldownSeconds", 5.0)))
-    now = time.time()
-    cm = _coerce_pir_sample(motion)
-    m = 0 if cm is None else cm
-    rising_motion = _PREV_PIR_MOTION_COERCED != 1 and m == 1
-    _PREV_PIR_MOTION_COERCED = m
-    if m == 1:
-        if _PIR_LAST_DEBOUNCED_MOTION_ACCEPT is None or (now - _PIR_LAST_DEBOUNCED_MOTION_ACCEPT) >= cooldown_s:
-            _PIR_LAST_MOTION_WALL = now
-            _PIR_LAST_DEBOUNCED_MOTION_ACCEPT = now
-        new_occ = 1
-    else:
-        if _PIR_LAST_MOTION_WALL is not None and (now - _PIR_LAST_MOTION_WALL) < vac_s:
-            new_occ = 1
-        else:
-            new_occ = 0
-    # Occupé : pousser tout de suite à chaque **nouveau** passage à mouvement (0→1), même si déjà occupé (ex. fin de vacance puis re-mouvement).
-    if new_occ == _PUBLISHED_PIR_OCCUPANCY and not rising_motion:
+def reset_occupancy(db, room_id: str):
+    """Remet la salle a disponible (occupancy=0) apres absence de mouvement."""
+    db.collection('rooms').document(room_id).update({'occupancy': 0})
+    log.info(f'Aucun mouvement -> room {room_id} disponible')
+
+
+# ── Dashboard : heartbeat + relance à distance ────────────────────────────────
+_last_restart_check = 0.0
+RESTART_CHECK_INTERVAL = 30  # secondes entre deux vérifications Firestore
+
+
+def update_device_heartbeat(db, device_id: str):
+    """Met à jour lastUpdate sur le document device pour confirmer que l'agent est actif."""
+    if not device_id:
         return
     try:
+<<<<<<< HEAD
+        db.collection("devices").document(device_id).update({
+            "lastUpdate": firestore.SERVER_TIMESTAMP,
+        })
+=======
         db.collection("rooms").document(rid).set(
             {
                 "occupancy": int(new_occ),
@@ -1152,242 +492,549 @@ def sync_room_occupancy_from_pir(db, room_id: str, cfg: dict, motion):
             tag = " (libre: aucun mouvement depuis " + str(vac_min) + " min)"
         msg = "syncRoomOccupancyFromPir: room_id=" + rid + " occupancy -> " + str(int(new_occ)) + tag
         print(msg, flush=True)
+>>>>>>> de425048a4433d79704cfc35b86f357f42007b07
     except Exception as e:
-        print("syncRoomOccupancyFromPir:", e, flush=True)
+        log.warning(f"Heartbeat device impossible: {e}")
 
 
-def main():
-    if not SA_PATH.is_file():
-        raise SystemExit(f"Manque {SA_PATH.name} — compte de service Firebase (console Projet > Comptes de service).")
-    cfg = load_cfg()
-    room_id = _normalize_firestore_room_id(str(cfg.get("roomId") or "").strip())
-    device_id = str(cfg.get("deviceDocId") or "").strip()
-    if not room_id or not device_id:
-        raise SystemExit("agent_config.json : roomId et deviceDocId obligatoires (chaînes).")
+def check_restart_signal(db, device_id: str):
+    """
+    Vérifie si le dashboard a demandé une relance (serviceRestartRequestedAt).
+    Si oui, met à jour lastUpdate (confirmation) et remplace le processus courant.
+    """
+    global _last_restart_check
+    if not device_id:
+        return
+    now = time.time()
+    if now - _last_restart_check < RESTART_CHECK_INTERVAL:
+        return
+    _last_restart_check = now
+
     try:
-        interval = int(cfg.get("intervalSeconds", 900))
-    except (TypeError, ValueError):
-        interval = 900
-    interval = max(60, min(interval, 86400))
+        doc = db.collection("devices").document(device_id).get()
+        if not doc.exists:
+            return
+        req = doc.to_dict().get("serviceRestartRequestedAt")
+        if req is None:
+            return
+        # Firestore Timestamp ou nombre (ms)
+        if hasattr(req, "timestamp"):
+            req_ts = req.timestamp()
+        else:
+            req_ts = float(req) / 1000.0
+        if req_ts > AGENT_START_TIME + 5:
+            log.info("Relance demandée via dashboard — redémarrage de l'agent...")
+            db.collection("devices").document(device_id).update({
+                "lastUpdate": firestore.SERVER_TIMESTAMP,
+            })
+            os.execv(sys.executable, [sys.executable] + sys.argv)
+    except Exception as e:
+        log.warning(f"Erreur vérification relance: {e}")
 
-    if not firebase_admin._apps:
-        firebase_admin.initialize_app(credentials.Certificate(str(SA_PATH)))
-    db = firestore.client()
-    dref = db.collection("devices").document(device_id)
 
-    last_cycle = 0.0
-    last_push_wall = 0.0
-    last_restart_req_wall = 0.0
-    last_pir_occ_sync = 0.0
-    # Lecture document devices (capture / restart) : au plus toutes les 30 s pour limiter Firestore ; le PIR peut boucler plus vite.
-    last_device_doc_poll = -1e9
-    DEVICE_DOC_POLL_S = 30.0
+# ── Boucle principale ─────────────────────────────────────────────────────────
+def main():
+    cfg = load_config()
+    firebase_cfg = cfg.get("firebase", {})
+    room_id = str(cfg.get("room_id", "1"))
+    interval = int(cfg.get("interval_seconds", 300))
+    sensors = cfg.get("sensors", {})
+
+    dht_pin = int(sensors.get('dht22_pin', 4))
+    pir_pin = int(sensors.get('pir_pin', 17))
+    light_sensor_type = sensors.get('light_sensor_type', 'bh1750_i2c')
+    light_gpio_pin = int(sensors.get('light_gpio_pin', 27))
+    bh1750_addr = int(sensors.get('bh1750_addr', 0x23))
+    bh1750_bus = int(sensors.get('bh1750_i2c_bus', 1))
+    inmp441_device = sensors.get('inmp441_device', None)   # None = auto, 'disabled' = desactive
+    inmp441_sr = int(sensors.get('inmp441_samplerate', 16000))
+    inmp441_dur = float(sensors.get('inmp441_duration', 1.0))
+    sds011_port = sensors.get('sds011_port', '/dev/ttyUSB0')
+    inmp441_disabled = (inmp441_device == 'disabled')
+
+    noise_alerts_cfg = cfg.get("noise_alerts", {})
+    noise_alerts_enabled = bool(noise_alerts_cfg.get("enabled", True))
+    noise_medium_thr = float(noise_alerts_cfg.get("medium_threshold", 35))
+    noise_loud_thr = float(noise_alerts_cfg.get("loud_threshold", 65))
+    noise_cooldown = float(noise_alerts_cfg.get("cooldown_minutes", 30)) * 60
+
+    device_id = str(cfg.get("device_id", "")).strip()
+    project_id = firebase_cfg.get("project_id", "")
+    db = init_firebase(project_id)
+
+    # Heartbeat initial — confirme au dashboard que l'agent a (re)démarré
+    update_device_heartbeat(db, device_id)
+
+    # GPIO : initialisation unique AVANT setup_pir et read_analog_light_sensor
+    # (evite que setmode soit rappele plus tard et efface les event_detect PIR)
+    init_gpio()
+
+    # Auto-detecter le peripherique ALSA INMP441 si non specifie et non desactive
+    if inmp441_device is None:
+        inmp441_device = _find_inmp441_device()
+
+    log.info(f'Capteur lumiere : {light_sensor_type}'
+             + (f' GPIO {light_gpio_pin}' if light_sensor_type == 'analog_gpio' else ''))
+    if inmp441_disabled:
+        log.info('Microphone INMP441 desactive')
+
+    # PIR -- etat occupancy (polling)
+    VACANCY_SECONDS = int(cfg.get('pir_vacancy_seconds', 120))   # 2 min par defaut
+    MOTION_REFRESH_SECONDS = 30   # Rafraichit lastMotionAt toutes les 30s pendant occupation
+    PIR_DEBOUNCE_COUNT = 3        # Lectures HIGH consecutives requises avant de confirmer le mouvement
+    PIR_STUCK_SECONDS = 300       # Si HIGH en continu > 5 min sans jamais LOW -> capteur bloque
+    was_occupied = False
+    last_motion_ts = 0.0        # monotonic -- derniere fois que PIR etait HIGH confirme
+    last_motion_write_ts = 0.0  # monotonic -- derniere ecriture Firestore occupation
+    pir_high_count = 0          # compteur debounce -- reinitialise a 0 des que le PIR est LOW
+    pir_stuck_since = 0.0       # monotonic -- debut d'un HIGH continu (0 = capteur LOW)
+
+    setup_pir(pir_pin)
+
+    # Diagnostic PIR au demarrage -- valeur brute de la broche avant toute detection
+    try:
+        import RPi.GPIO as _GPIO
+        _raw = _GPIO.input(pir_pin)
+        log.info(f'PIR diagnostic demarrage -- GPIO {pir_pin} = {"HIGH" if _raw else "LOW"}')
+        if _raw:
+            log.warning(
+                f'PIR GPIO {pir_pin} lit HIGH au demarrage (aucun mouvement possible). '
+                'Causes probables : VCC branche sur 3.3V au lieu de 5V, '
+                'cablage incorrect, ou capteur defectueux.'
+            )
+    except Exception as _e:
+        log.warning(f'PIR diagnostic impossible : {_e}')
+
+    # Récupérer le nom de la salle pour les alertes
+    room_name = room_id
+    try:
+        room_doc = db.collection("rooms").document(room_id).get()
+        if room_doc.exists:
+            room_name = room_doc.to_dict().get("name", room_id)
+    except Exception as e:
+        log.warning(f"Impossible de récupérer le nom de la salle: {e}")
+
+    last_noise_alert_ts = 0.0
+    # Dernieres valeurs valides -- evite d'ecraser un bon releve par un None transitoire
+    last_valid: dict = {}
+    log.info(f'Agent demarre -- room={room_id} ({room_name}), device={device_id}, intervalle={interval}s, vacance={VACANCY_SECONDS}s')
+
+    # ── Helper PIR : polling + debounce + detection capteur bloque ──────────
+    def poll_pir():
+        nonlocal was_occupied, last_motion_ts, last_motion_write_ts, pir_high_count, pir_stuck_since
+        now = time.monotonic()
+        if is_pir_active(pir_pin):
+            # Horodater le debut d'un signal HIGH continu
+            if pir_stuck_since == 0.0:
+                pir_stuck_since = now
+
+            # Capteur bloque : HIGH sans interruption depuis trop longtemps
+            stuck_duration = now - pir_stuck_since
+            if stuck_duration >= PIR_STUCK_SECONDS:
+                if int(stuck_duration) % 60 == 0:  # log toutes les minutes seulement
+                    log.warning(
+                        f'PIR bloque HIGH depuis {int(stuck_duration)}s -- '
+                        f'Firestore non mis a jour. Verifier VCC=5V et cablage GPIO {pir_pin}.'
+                    )
+                return  # ignorer ce signal, ne pas marquer la salle occupee
+
+            pir_high_count = min(pir_high_count + 1, PIR_DEBOUNCE_COUNT)
+            if pir_high_count >= PIR_DEBOUNCE_COUNT:
+                # Mouvement confirme : N lectures consecutives HIGH
+                last_motion_ts = now
+                if not was_occupied or (now - last_motion_write_ts) >= MOTION_REFRESH_SECONDS:
+                    try:
+                        update_motion(db, room_id)
+                        last_motion_write_ts = now
+                        if not was_occupied:
+                            log.info(f'PIR confirme ({PIR_DEBOUNCE_COUNT} HIGH consecutifs) -> room {room_id} occupee')
+                    except Exception as e:
+                        log.error(f'Erreur mouvement Firestore: {e}')
+                was_occupied = True
+        else:
+            # Signal LOW : reinitialiser debounce et horodatage stuck
+            pir_high_count = 0
+            pir_stuck_since = 0.0
+            if was_occupied and last_motion_ts > 0 and (now - last_motion_ts) >= VACANCY_SECONDS:
+                try:
+                    reset_occupancy(db, room_id)
+                except Exception as e:
+                    log.error(f'Erreur reset occupancy: {e}')
+                was_occupied = False
+                last_motion_ts = 0.0
+                last_motion_write_ts = 0.0
 
     while True:
-        now = time.time()
-        try:
-            if (now - last_device_doc_poll) >= DEVICE_DOC_POLL_S:
-                snap = dref.get()
-                last_device_doc_poll = time.time()
-                data = (snap.to_dict() or {}) if snap.exists else {}
-                rr = data.get("serviceRestartRequestedAt")
-                if rr is not None and hasattr(rr, "timestamp"):
-                    ts_rr = float(rr.timestamp())
-                    if ts_rr > last_restart_req_wall:
-                        try:
-                            dref.update(
-                                {
-                                    "serviceRestartRequestedAt": DELETE_FIELD,
-                                    "lastUpdate": firestore.SERVER_TIMESTAMP,
-                                }
-                            )
-                        except Exception as ex:
-                            print("serviceRestartRequestedAt: effacement impossible:", ex, flush=True)
-                        else:
-                            last_restart_req_wall = ts_rr
-                            print(datetime.now().isoformat(), "relance systemd (serviceRestartRequestedAt)", flush=True)
-                            _trigger_systemd_service_restart()
-                            time.sleep(30)
-                            continue
-                req = data.get("sensorCaptureRequestedAt")
-                force = False
-                if req is not None and hasattr(req, "timestamp"):
-                    if req.timestamp() > last_push_wall:
-                        force = True
-                due = (now - last_cycle) >= interval
-                if due or force:
-                    vals, pir_motion = read_sensors(cfg)
-                    push_measurement(db, room_id, vals)
-                    sync_room_occupancy_from_pir(db, room_id, cfg, pir_motion)
-                    last_pir_occ_sync = time.time()
-                    # update() échoue si le document devices n’existe pas encore — set(merge) suffit pour les horodatages
-                    try:
-                        dref.update(
-                            {
-                                "lastSensorPushAt": firestore.SERVER_TIMESTAMP,
-                                "lastUpdate": firestore.SERVER_TIMESTAMP,
-                                "sensorCaptureRequestedAt": DELETE_FIELD,
-                            }
-                        )
-                    except Exception:
-                        dref.set(
-                            {
-                                "lastSensorPushAt": firestore.SERVER_TIMESTAMP,
-                                "lastUpdate": firestore.SERVER_TIMESTAMP,
-                            },
-                            merge=True,
-                        )
-                    last_cycle = now
-                    last_push_wall = time.time()
-                    print(
-                        datetime.now().isoformat(),
-                        "measurement pushed",
-                        vals,
-                        "pir_gpio_motion=",
-                        pir_motion,
-                        "(0/1 is_active ; occupancy avec pirVacancyMinutes apres dernier 1)",
-                        flush=True,
-                    )
-        except Exception as e:
-            print("error:", e, flush=True)
-        try:
-            hw_poll = _hardware_dict(cfg)
-            if _cfg_bool(hw_poll, "syncRoomOccupancyFromPir", True):
-                pol = max(0.25, min(600.0, _cfg_float(hw_poll, "pirOccupancyPollSeconds", 0.5)))
-                if time.time() - last_pir_occ_sync >= pol:
-                    pm = poll_pir_motion_only(cfg)
-                    if pm is not None:
-                        sync_room_occupancy_from_pir(db, room_id, cfg, pm)
-                    last_pir_occ_sync = time.time()
-        except Exception as e_poll:
-            print("pir occupancy poll:", e_poll, flush=True)
-        now3 = time.time()
-        until_dev = DEVICE_DOC_POLL_S - (now3 - last_device_doc_poll)
-        hw_sl = _hardware_dict(cfg)
-        if _cfg_bool(hw_sl, "syncRoomOccupancyFromPir", True):
-            pol_sl = max(0.25, min(600.0, _cfg_float(hw_sl, "pirOccupancyPollSeconds", 0.5)))
-            until_pir = pol_sl - (now3 - last_pir_occ_sync)
+        loop_start = time.monotonic()
+
+        poll_pir()
+
+        # Lecture de tous les capteurs
+        temperature, humidity = read_dht22(dht_pin)
+
+        if light_sensor_type == 'analog_gpio':
+            light = read_analog_light_sensor(light_gpio_pin)
+        elif light_sensor_type == 'bh1750_i2c':
+            light = read_bh1750(bh1750_addr, preferred_bus=bh1750_bus)
         else:
-            until_pir = 1e9
-        sleep_s = max(0.25, min(30.0, min(until_dev, until_pir)))
-        time.sleep(sleep_s)
+            light = None
+
+        noise = None if inmp441_disabled else read_inmp441_level(inmp441_device, inmp441_dur, inmp441_sr)
+        pm25, pm10 = read_sds011(sds011_port)
+
+        # Conserver les dernieres valeurs valides pour eviter d'ecraser un bon releve
+        # par un None transitoire (ex. DHT22 qui rate un cycle)
+        for key, val in [('temperature', temperature), ('humidity', humidity),
+                         ('light', light), ('noise', noise),
+                         ('pm25', pm25), ('pm10', pm10)]:
+            if val is not None:
+                last_valid[key] = val
+
+        measurement = {
+            'temperature': temperature if temperature is not None else last_valid.get('temperature'),
+            'humidity':    humidity    if humidity    is not None else last_valid.get('humidity'),
+            'light':       light       if light       is not None else last_valid.get('light'),
+            'noise':       noise       if noise       is not None else last_valid.get('noise'),
+            'pm25':        pm25        if pm25        is not None else last_valid.get('pm25'),
+            'pm10':        pm10        if pm10        is not None else last_valid.get('pm10'),
+        }
+
+        # Ne pas ecrire si on n'a jamais eu de donnees (premier demarrage, aucun capteur branche)
+        if not last_valid:
+            log.warning('Aucune donnee capteur disponible -- ecriture ignoree ce cycle')
+        else:
+            try:
+                write_measurement(db, room_id, measurement)
+            except Exception as e:
+                log.error(f'Erreur Firestore: {e}')
+
+        # Alerte automatique bruit
+        if noise_alerts_enabled and noise is not None and noise >= noise_medium_thr:
+            now_ts = time.monotonic()
+            if now_ts - last_noise_alert_ts >= noise_cooldown:
+                create_noise_alert(db, room_name, noise, noise_loud_thr)
+                last_noise_alert_ts = now_ts
+
+        # Attente inter-cycle -- polling PIR chaque seconde + relance dashboard
+        elapsed = time.monotonic() - loop_start
+        deadline = time.monotonic() + max(0, interval - elapsed)
+        while time.monotonic() < deadline:
+            poll_pir()
+            check_restart_signal(db, device_id)
+            time.sleep(1)
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except KeyboardInterrupt:
+        log.info("Agent arrêté (Ctrl-C).")
+    finally:
+        try:
+            import RPi.GPIO as GPIO
+            GPIO.cleanup()
+        except Exception:
+            pass
 `;
 }
 
-export function buildInstallSh(): string {
-  return `#!/bin/bash
-set -Eeuo pipefail
-cd "$(dirname "$0")"
-echo "=== Installation agent salle (Python venv + systemd) ==="
+export function buildInstallSh(config?: SensorHardwareConfig): string {
+  const hasMic      = config?.microphone !== 'none';
+  const hasI2cLight = config?.lightSensor !== 'analog_3pin' && config?.lightSensor !== 'none';
+  const hasAnalogLight = config?.lightSensor === 'analog_3pin';
+  const lightGpio   = config?.analogLightGpioPin ?? 27;
 
-# Toujours arrêter l’agent avant copie / venv (évite fichiers verrouillés + garantit relecture du nouveau code au démarrage)
-sudo systemctl stop room-sensor-agent 2>/dev/null || true
-sudo systemctl reset-failed room-sensor-agent 2>/dev/null || true
-
-# Même si pip / vérifications échouent (set -e → exit), relancer le service à la fin (évite laisser l’unité arrêtée).
-_room_sensor_install_restart_done=0
-_room_sensor_install_restart_service() {
-  if [[ "\${_room_sensor_install_restart_done:-0}" -eq 1 ]]; then
-    return 0
-  fi
-  _room_sensor_install_restart_done=1
-  echo "→ room-sensor-agent : daemon-reload / enable / restart (fin install.sh ou récupération après erreur)." >&2
-  sudo systemctl daemon-reload 2>/dev/null || true
-  sudo systemctl enable room-sensor-agent 2>/dev/null || true
-  sudo systemctl restart room-sensor-agent 2>/dev/null || sudo systemctl start room-sensor-agent 2>/dev/null || true
-}
-trap '_room_sensor_install_restart_service' EXIT
-
-sudo apt-get update -qq
-sudo apt-get install -y python3-pip python3-venv python3-lgpio build-essential python3-dev
-# libgpiod : absent sur certaines images / dépôts — ne pas faire échouer tout l’install (Blinka/DHT fonctionnent souvent sans).
-if sudo apt-get install -y libgpiod2 2>/dev/null; then
-  :
-elif sudo apt-get install -y libgpiod3 2>/dev/null; then
-  :
+  const i2sBlock = hasMic ? `echo "  -- I2S (INMP441)"
+# Decommenter dtparam=i2s=on s'il est commente, sinon l'ajouter
+if grep -qxF "dtparam=i2s=on" "$CONFIG_FILE" 2>/dev/null; then
+  inf "Deja present : dtparam=i2s=on"
+elif grep -qE "^#[[:space:]]*(dtparam=i2s=on)[[:space:]]*$" "$CONFIG_FILE" 2>/dev/null; then
+  sudo sed -i 's|^#[[:space:]]*dtparam=i2s=on[[:space:]]*$|dtparam=i2s=on|' "$CONFIG_FILE"
+  ok "Decommente : dtparam=i2s=on"; REBOOT_NEEDED=true
 else
-  echo "AVERTISSEMENT: libgpiod2/3 introuvable dans apt — poursuite (sudo apt update ou image récente si besoin)." >&2
+  echo "dtparam=i2s=on" | sudo tee -a "$CONFIG_FILE" > /dev/null
+  ok "Ajoute : dtparam=i2s=on"; REBOOT_NEEDED=true
 fi
-sudo apt-get install -y python3-libgpiod 2>/dev/null || true
-rm -rf venv
-# --system-site-packages : lgpio installé par apt reste importable dans le venv (Pi 5 / PIR).
-python3 -m venv --system-site-packages venv
-source venv/bin/activate
-pip install --upgrade pip
-pip install firebase-admin smbus2 pyserial spidev rpi-lgpio gpiozero
-# lgpio dans le venv (PIR / gpiozero) si le site-packages système n’est pas visible — complète python3-lgpio (apt).
-pip install "lgpio>=0.2" || true
-# DHT : CircuitPython — ne pas masquer les erreurs pip (sinon « No module named board » au runtime).
-# Le paquet PyPI « Adafruit-DHT » échoue au build sur Pi 5 ; ne pas l’installer ici.
-pip install --upgrade adafruit-blinka adafruit-circuitpython-dht
-if ! venv/bin/python -c "import board" 2>/dev/null; then
-  echo "ERREUR: adafruit-blinka n’expose pas « board » après pip — vérifiez la sortie pip ci-dessus." >&2
-  exit 1
+
+if [ ! -d "$OVERLAY_DIR" ]; then
+  sudo apt-get install -y -qq raspi-firmware 2>/dev/null || true
 fi
-if ! venv/bin/python -c "import adafruit_dht" 2>/dev/null; then
-  echo "ERREUR: adafruit-circuitpython-dht introuvable après pip." >&2
+
+CHOSEN_OVERLAY=""
+if [ -d "$OVERLAY_DIR" ]; then
+  for candidate in "i2s-mems" "adau7002-simple" "googlevoicehat-soundcard"; do
+    if [ -f "$OVERLAY_DIR/\${candidate}.dtbo" ]; then
+      CHOSEN_OVERLAY="$candidate"
+      break
+    fi
+  done
+fi
+
+if [ -n "$CHOSEN_OVERLAY" ]; then
+  add_to_config "dtoverlay=\${CHOSEN_OVERLAY}"
+  ok "Overlay I2S : dtoverlay=\${CHOSEN_OVERLAY}"
+else
+  add_to_config "dtoverlay=i2s-mems"
+  warn "Overlay i2s-mems ajoute (si arecord -l reste vide apres reboot : ls $OVERLAY_DIR | grep i2s)"
+fi
+
+if [ ! -f /etc/asound.conf ]; then
+  sudo tee /etc/asound.conf > /dev/null <<'ALSA'
+# INMP441 I2S -- SmartRoom
+pcm.inmp441 { type hw; card 1; device 0 }
+ctl.inmp441 { type hw; card 1 }
+ALSA
+  ok "ALSA conf creee : /etc/asound.conf"
+fi`
+    : `inf "Microphone desactive -- I2S non configure"`;
+
+  const verifyI2sSection = hasMic ? `echo ""; sep; echo "--- I2S / INMP441"
+if arecord -l 2>/dev/null | grep -qiE "i2s|mems|adau|inmp"; then
+  CARD_NUM=$(arecord -l 2>/dev/null | grep -iE "i2s|mems|adau|inmp" | grep -oE 'card [0-9]+' | grep -oE '[0-9]+' | head -1)
+  INMP441_DEV="hw:$CARD_NUM,0"; ok "INMP441 sur $INMP441_DEV"
+  if arecord -D "plughw:$CARD_NUM,0" -r16000 -c2 -fS32_LE -d2 -q /tmp/smartroom_test.wav 2>/dev/null \
+  || arecord -D "$INMP441_DEV" -r16000 -c2 -fS32_LE -d2 -q /tmp/smartroom_test.wav 2>/dev/null; then
+    SIZE=$(wc -c < /tmp/smartroom_test.wav 2>/dev/null || echo 0)
+    [ "$SIZE" -gt 1000 ] && ok "Enregistrement OK -- $SIZE octets" || warn "WAV trop petit ($SIZE o)"
+    rm -f /tmp/smartroom_test.wav
+  else err "Echec enregistrement depuis $INMP441_DEV"; ALL_OK=false; fi
+else
+  err "INMP441 non detecte (arecord -l vide) -- verifier dtparam=i2s=on et reboot"; ALL_OK=false
+fi` : `echo ""; sep; echo "--- Microphone"
+inf "Microphone non configure (desactive dans les parametres)"`;
+
+  const verifyLightSection = hasI2cLight
+    ? `  for BUS in $(ls /dev/i2c-* 2>/dev/null | grep -oE '[0-9]+$'); do
+    if i2cdetect -y "$BUS" 2>/dev/null | grep -qE " 23 | 5c "; then
+      ok "BH1750 trouve sur bus I2C $BUS"; BH1750_BUS="$BUS"; fi
+  done
+  [ -z "$BH1750_BUS" ] && warn "BH1750 non detecte -- verifier cablage SDA/SCL (GPIO 2/3)"`
+    : hasAnalogLight
+    ? `  ok "Capteur lumiere analogique 3 broches -- GPIO ${lightGpio} (OUT)" `
+    : `  inf "Capteur lumiere non configure"`;
+
+  return `#!/bin/bash
+# SmartRoom Sensor Agent — Installation Debian / Raspberry Pi
+#
+# Configure automatiquement : I2C, SPI${hasMic ? ', I2S (INMP441)' : ''}, Python venv, systemd
+#
+# Codes de sortie :
+#   0  → installation complète, pas de reboot nécessaire
+#   2  → reboot nécessaire pour activer I2C/SPI/I2S
+#   1  → erreur fatale
+set -euo pipefail
+
+AGENT_DIR="$(cd "$(dirname "$0")" && pwd)"
+REBOOT_NEEDED=false
+
+ok()   { echo "  [OK]    $*"; }
+warn() { echo "  [WARN]  $*"; }
+err()  { echo "  [ERR]   $*" >&2; }
+inf()  { echo "  [->]    $*"; }
+sep()  { echo "--------------------------------------------"; }
+
+echo ""
+echo "=== SmartRoom - Installation Debian / RPi ==="
+echo ""
+
+# ── 1. Détection matériel ─────────────────────────────────────────────────────
+sep; echo "[1/6] Detection du materiel"
+if [ -f /proc/device-tree/model ]; then
+  MODEL=$(tr -d '\\0' < /proc/device-tree/model)
+  inf "Modèle : $MODEL"
+  echo "$MODEL" | grep -qi "raspberry" && ok "Raspberry Pi détecté" || warn "Modèle non-RPi"
+fi
+ARCH=$(uname -m); inf "Architecture : $ARCH"
+OS_PRETTY=$(grep PRETTY_NAME /etc/os-release 2>/dev/null | cut -d'"' -f2 || echo "inconnue")
+inf "Système : $OS_PRETTY"
+
+# ── 2. Localiser config.txt ───────────────────────────────────────────────────
+sep; echo "[2/6] Localisation firmware Raspberry Pi"
+
+locate_firmware() {
+  for c in "/boot/firmware/config.txt" "/boot/config.txt"; do
+    [ -f "$c" ] && { echo "$c"; return; }
+  done
+  echo ""
+}
+CONFIG_FILE=$(locate_firmware)
+
+if [ -z "$CONFIG_FILE" ]; then
+  inf "config.txt introuvable — installation raspi-firmware..."
+  sudo apt-get update -qq
+  sudo apt-get install -y -qq raspi-firmware 2>/dev/null \\
+    || sudo apt-get install -y -qq raspberrypi-bootloader 2>/dev/null || true
+  CONFIG_FILE=$(locate_firmware)
+fi
+
+if [ -z "$CONFIG_FILE" ]; then
+  err "Impossible de localiser /boot/firmware/config.txt ou /boot/config.txt"
   exit 1
 fi
 
-sudo mkdir -p /opt/room-sensor
-sudo cp -a . /opt/room-sensor/
-sudo chown -R "$USER:$USER" /opt/room-sensor || true
+FIRMWARE_DIR="$(dirname "$CONFIG_FILE")"
+OVERLAY_DIR="$FIRMWARE_DIR/overlays"
+ok "config.txt   : $CONFIG_FILE"
+ok "Overlays dir : $OVERLAY_DIR"
 
-cat << 'UNIT' | sudo tee /etc/systemd/system/room-sensor-agent.service > /dev/null
+add_to_config() {
+  local line="$1"
+  if grep -qxF "$line" "$CONFIG_FILE" 2>/dev/null; then
+    inf "Déjà présent  : $line"
+  else
+    echo "$line" | sudo tee -a "$CONFIG_FILE" > /dev/null
+    ok "Ajouté        : $line"
+    REBOOT_NEEDED=true
+  fi
+}
+
+add_module() {
+  local mod="$1"
+  if ! grep -qxF "$mod" /etc/modules 2>/dev/null; then
+    echo "$mod" | sudo tee -a /etc/modules > /dev/null
+    ok "Module /etc/modules : $mod"
+    REBOOT_NEEDED=true
+  else
+    inf "Module déjà dans /etc/modules : $mod"
+  fi
+  sudo modprobe "$mod" 2>/dev/null && inf "Module chargé : $mod" || true
+}
+
+# ── 3. Paquets système ────────────────────────────────────────────────────────
+sep; echo "[3/6] Paquets systeme"
+sudo apt-get update -qq
+sudo apt-get install -y -qq \\
+  python3 python3-pip python3-venv python3-dev \\
+  libatlas-base-dev libportaudio2 portaudio19-dev libasound2-dev alsa-utils \\
+  i2c-tools libgpiod2 raspi-firmware 2>/dev/null || true
+ok "Paquets système installés"
+
+# ── 4. I2C / SPI / I2S ───────────────────────────────────────────────────────
+sep; echo "[4/6] Activation I2C / SPI / I2S"
+
+echo "  -- I2C"
+add_to_config "dtparam=i2c_arm=on"
+add_module "i2c-dev"
+grep -qF "i2c_arm_baudrate" "$CONFIG_FILE" 2>/dev/null || add_to_config "dtparam=i2c_arm_baudrate=100000"
+
+echo "  -- SPI"
+add_to_config "dtparam=spi=on"
+add_module "spidev"
+
+${i2sBlock}
+
+inf "config.txt (dtparam/dtoverlay) :"
+grep -E "dtparam|dtoverlay" "$CONFIG_FILE" | while read -r l; do echo "    $l"; done
+
+# ── 5. Python venv + dépendances ─────────────────────────────────────────────
+sep; echo "[5/6] Environnement Python"
+
+VENV="$AGENT_DIR/.venv"
+python3 -m venv "$VENV"
+"$VENV/bin/pip" install --quiet --upgrade pip
+"$VENV/bin/pip" install --quiet \\
+  firebase-admin \\
+  smbus2 \\
+  pyserial \\
+  RPi.GPIO \\
+  adafruit-circuitpython-dht \\
+  adafruit-circuitpython-ads1x15 \\
+  adafruit-blinka
+ok "Virtualenv : $VENV"
+
+# ── 6. Service systemd ────────────────────────────────────────────────────────
+sep; echo "[6/6] Service systemd"
+
+ACTUAL_USER="\${SUDO_USER:-$USER}"
+sudo usermod -aG audio,i2c,spi,gpio "$ACTUAL_USER" 2>/dev/null || true
+
+sudo tee /etc/systemd/system/smartroom-agent.service > /dev/null <<EOF
 [Unit]
-Description=Room sensor agent -> Firestore
-After=network-online.target
+Description=SmartRoom Sensor Agent (DHT22${hasMic ? ' + INMP441' : ''}${hasI2cLight ? ' + BH1750' : hasAnalogLight ? ' + LightSensor' : ''} + SDS011 + PIR)
+After=network-online.target${hasMic ? ' sound.target' : ''}
 Wants=network-online.target
-StartLimitIntervalSec=0
 
 [Service]
 Type=simple
-User=pi
-WorkingDirectory=/opt/room-sensor
-ExecStart=/opt/room-sensor/venv/bin/python /opt/room-sensor/sensor_agent.py
-Restart=always
-RestartSec=20
+User=\${ACTUAL_USER}
+WorkingDirectory=\${AGENT_DIR}
+ExecStart=\${VENV}/bin/python3 \${AGENT_DIR}/sensor_agent.py
+Restart=on-failure
+RestartSec=15
+StandardOutput=journal
+StandardError=journal
+Environment=PYTHONUNBUFFERED=1
 
 [Install]
 WantedBy=multi-user.target
-UNIT
+EOF
 
-# sudo NOPASSWD : relance à distance via Firestore (serviceRestartRequestedAt) — uniquement cette unité.
-_tmp_sudo="$(mktemp)"
-cat << 'SUDOERS' > "$_tmp_sudo"
-pi ALL=(root) NOPASSWD: /usr/bin/systemctl restart room-sensor-agent, /usr/bin/systemctl start room-sensor-agent, /usr/bin/systemctl stop room-sensor-agent
-SUDOERS
-if sudo visudo -cf "$_tmp_sudo" 2>/dev/null; then
-  sudo cp "$_tmp_sudo" /etc/sudoers.d/room-sensor-agent
-  sudo chmod 0440 /etc/sudoers.d/room-sensor-agent
+sudo systemctl daemon-reload
+sudo systemctl enable smartroom-agent
+ok "Service smartroom-agent activé"
+
+# ── verify.sh (post-reboot) ───────────────────────────────────────────────────
+VERIFY_SCRIPT="$AGENT_DIR/verify.sh"
+cat > "$VERIFY_SCRIPT" << 'VERIFY_EOF'
+#!/bin/bash
+AGENT_DIR="$(cd "$(dirname "$0")" && pwd)"
+CONFIG_JSON="$AGENT_DIR/agent_config.json"
+ok()   { echo "  [OK]    $*"; }
+warn() { echo "  [WARN]  $*"; }
+err()  { echo "  [ERR]   $*" >&2; }
+inf()  { echo "  [->]    $*"; }
+sep()  { echo "--------------------------------------------"; }
+echo ""
+echo "=== SmartRoom - Verification post-reboot ==="
+echo ""
+ALL_OK=true; BH1750_BUS=""; INMP441_DEV=""
+sep; echo "--- I2C"
+if ls /dev/i2c-* &>/dev/null 2>&1; then
+  ok "Bus disponibles : $(ls /dev/i2c-* | tr '\n' ' ')"
+${verifyLightSection}
 else
-  echo "AVERTISSEMENT: fragment sudoers refusé — relance à distance (Firestore) désactivée." >&2
-  sudo rm -f /etc/sudoers.d/room-sensor-agent
+  err "Aucun /dev/i2c-* -- dtparam=i2c_arm=on dans config.txt ?"; ALL_OK=false
 fi
-rm -f "$_tmp_sudo"
-
-_room_sensor_install_restart_service
-
-# Attendre jusqu’à ~25 s (Pi lente, imports capteurs) — sans faire échouer tout le déploiement si capteurs manquent
-svc_ok=0
-for _ in {1..25}; do
-  if sudo systemctl is-active --quiet room-sensor-agent; then
-    svc_ok=1
-    break
-  fi
-  sleep 1
-done
-if [[ "$svc_ok" -eq 1 ]]; then
-  echo "OK — room-sensor-agent est actif (sudo systemctl status room-sensor-agent)"
+echo ""; sep; echo "--- SPI"
+ls /dev/spidev* &>/dev/null 2>&1 \
+  && ok "SPI : $(ls /dev/spidev* 2>/dev/null | tr '\n' ' ')" \
+  || warn "Aucun /dev/spidev* -- dtparam=spi=on dans config.txt ?"
+${verifyI2sSection}
+echo ""; sep; echo "--- Mise a jour agent_config.json"
+if [ -f "$CONFIG_JSON" ]; then
+  [ -n "$BH1750_BUS" ] && python3 -c "
+import json
+with open('$CONFIG_JSON') as f: c=json.load(f)
+c.setdefault('sensors',{})['bh1750_i2c_bus']=int('$BH1750_BUS')
+with open('$CONFIG_JSON','w') as f: json.dump(c,f,indent=2)
+" 2>/dev/null && ok "bh1750_i2c_bus mis a jour : $BH1750_BUS"
+  [ -n "$INMP441_DEV" ] && python3 -c "
+import json
+with open('$CONFIG_JSON') as f: c=json.load(f)
+c.setdefault('sensors',{})['inmp441_device']='$INMP441_DEV'
+with open('$CONFIG_JSON','w') as f: json.dump(c,f,indent=2)
+" 2>/dev/null && ok "inmp441_device mis a jour : $INMP441_DEV"
+fi
+echo ""; sep
+if $ALL_OK; then
+  echo "  [OK]   Tout est operationnel !"
 else
-  echo "AVERTISSEMENT: room-sensor-agent n’est pas « active » après 25 s (vérifiez les logs sur la Pi)." >&2
-  sudo systemctl status room-sensor-agent --no-pager -l || true
-  echo "Logs récents : sudo journalctl -u room-sensor-agent -n 40 --no-pager" >&2
-  # Les fichiers sont déjà copiés dans /opt/room-sensor ; ne pas bloquer le script de déploiement.
+  echo "  [FAIL] Des problemes ont ete detectes (voir ci-dessus)"
+fi
+echo ""
+VERIFY_EOF
+chmod +x "$VERIFY_SCRIPT"
+ok "verify.sh créé : $VERIFY_SCRIPT"
+
+# ── Résumé ─────────────────────────────────────────────────────────────────
+sep
+grep -E "dtparam|dtoverlay" "$CONFIG_FILE" | while read -r l; do echo "    $l"; done
+echo ""
+if [ "$REBOOT_NEEDED" = true ]; then
+  echo "=== REBOOT NECESSAIRE pour activer I2C/SPI/I2S ==="
+  exit 2
+else
+  echo "=== Installation complete - pas de reboot requis ==="
   exit 0
 fi
 `;
@@ -1431,6 +1078,8 @@ export type BuildDeployShOptions = {
   embeddedServiceAccountJson?: string | null;
   /** Intervalle d’envoi périodique, en minutes (sera converti en secondes dans agent_config.json). */
   intervalMinutes?: number;
+  /** Matériel physique présent — adapte install.sh et sensor_agent.py au capteur réel. */
+  sensorConfig?: SensorHardwareConfig;
 };
 
 /**
@@ -1445,9 +1094,10 @@ export function buildDeploySh(params: PiAgentBundleParams, options?: BuildDeploy
   const safeMinutes = Number.isFinite(requestedMinutes) ? Math.max(1, Math.min(1440, Math.round(requestedMinutes))) : 5;
   const intervalSeconds = safeMinutes * 60;
 
-  const agentJson = buildAgentConfigJson(params, intervalSeconds);
-  const py = buildSensorAgentPy();
-  const inst = buildInstallSh();
+  const sc = options?.sensorConfig;
+  const agentJson = buildAgentConfigJson(params, intervalSeconds, sc);
+  const py = buildSensorAgentPy(sc);
+  const inst = buildInstallSh(sc);
 
   const b64Agent = toBase64Wrapped(agentJson);
   const b64Py = toBase64Wrapped(py);
@@ -1508,12 +1158,13 @@ REMOTE="\${SSH_USER}@\${PI_IP}"`;
     : `cp "\${KEY_SRC}" "\${TMP}/serviceAccountKey.json"`;
 
   return `#!/usr/bin/env bash
-# Déploiement Raspberry Pi — dashboard (devices/${params.deviceDocId}, salle ${params.roomId})${useEmbedded ? ' — clé Firebase incluse' : ''}
+# Déploiement Raspberry Pi — SmartRoom (salle ${params.roomId})${useEmbedded ? ' — clé Firebase incluse' : ''}
+# Étapes : transfert → install.sh → reboot si nécessaire → verify.sh → démarrage agent
 set -euo pipefail
 
 ${usageAndKeyPath}
 SCP=(scp)
-SSH=(ssh)
+SSH=(ssh -o StrictHostKeyChecking=accept-new -o BatchMode=no -o ConnectTimeout=10)
 if [[ "\${SSH_PORT}" != "22" ]]; then
   SCP+=( -P "\${SSH_PORT}" )
   SSH+=( -p "\${SSH_PORT}" )
@@ -1522,7 +1173,6 @@ fi
 TMP=\$(mktemp -d)
 trap 'rm -rf "\${TMP}"' EXIT
 
-# Fenêtre console (ex. double-clic sous Windows) : attendre Entrée avant de se fermer.
 _pause_before_close() {
   echo "" >&2
   read -r -p "Appuyez sur Entrée pour quitter… " _ 2>/dev/null || read -r _ || true
@@ -1533,7 +1183,22 @@ b64_to_file() {
   if base64 -d <"\${inp}" >"\${out}" 2>/dev/null; then return 0; fi
   if base64 -D <"\${inp}" >"\${out}" 2>/dev/null; then return 0; fi
   if base64 --decode <"\${inp}" >"\${out}" 2>/dev/null; then return 0; fi
-  echo "Échec décodage base64. Utilisez Git Bash, WSL, macOS ou Linux avec base64." >&2
+  echo "Échec décodage base64. Utilisez Git Bash, WSL, macOS ou Linux." >&2
+  return 1
+}
+
+# Attend que le Pi soit joignable via SSH (après reboot)
+wait_for_pi() {
+  local max=180 interval=5 elapsed=0
+  echo ""
+  printf "  ⏳ Attente redémarrage du Pi"
+  while [ \$elapsed -lt \$max ]; do
+    if "\${SSH[@]}" -o BatchMode=yes "\${REMOTE}" "echo ONLINE" &>/dev/null; then
+      echo ""; echo "  ✓ Pi joignable — redémarrage terminé"; return 0
+    fi
+    printf "."; sleep \$interval; elapsed=\$(( elapsed + interval ))
+  done
+  echo ""
   return 1
 }
 
@@ -1545,26 +1210,78 @@ b64_to_file "\${TMP}/install.sh" "\${TMP}/inst.b64"
 ${serviceKeyStep}
 chmod +x "\${TMP}/sensor_agent.py" "\${TMP}/install.sh"
 
-echo "→ Connexion \${REMOTE} (dossier ~/\${REMOTE_DIR})..."
-"\${SSH[@]}" -o BatchMode=no -o StrictHostKeyChecking=accept-new "\${REMOTE}" "mkdir -p ~/\${REMOTE_DIR}"
+# ── Étape 1 : Transfert ───────────────────────────────────────────────────────
+echo ""; echo "──────────────────────────────────────────────"
+echo "→ Étape 1/4 — Connexion \${REMOTE} et transfert des fichiers..."
+"\${SSH[@]}" "\${REMOTE}" "mkdir -p ~/\${REMOTE_DIR}"
+"\${SCP[@]}" -o StrictHostKeyChecking=accept-new \\
+  "\${TMP}/agent_config.json" "\${TMP}/sensor_agent.py" \\
+  "\${TMP}/install.sh" "\${TMP}/serviceAccountKey.json" \\
+  "\${REMOTE}:~/\${REMOTE_DIR}/"
+echo "  ✓ Fichiers transférés"
 
-echo "→ Transfert des fichiers..."
-"\${SCP[@]}" "\${TMP}/agent_config.json" "\${TMP}/sensor_agent.py" "\${TMP}/install.sh" "\${TMP}/serviceAccountKey.json" "\${REMOTE}:~/\${REMOTE_DIR}/"
+# ── Étape 2 : install.sh ──────────────────────────────────────────────────────
+echo ""; echo "──────────────────────────────────────────────"
+echo "→ Étape 2/4 — Exécution de install.sh (I2C/SPI/I2S + Python + systemd)..."
+echo ""
 
-echo "→ Installation sur le Pi (venv + systemd)..."
-"\${SSH[@]}" -tt -o BatchMode=no -o StrictHostKeyChecking=accept-new "\${REMOTE}" "set -Eeuo pipefail; chmod +x ~/\${REMOTE_DIR}/install.sh ~/\${REMOTE_DIR}/sensor_agent.py && cd ~/\${REMOTE_DIR} && ./install.sh" || {
-  code=$?
-  echo ""
-  echo "❌ Échec de l'installation distante (code \${code})."
-  echo "Relance manuelle sur la Pi :"
-  echo "  ssh -p \${SSH_PORT} \${SSH_USER}@\${PI_IP}"
-  echo "  cd ~/\${REMOTE_DIR} && chmod +x install.sh sensor_agent.py && ./install.sh"
-  echo "Puis vérifiez : sudo systemctl status room-sensor-agent --no-pager -l"
-  _pause_before_close
-  exit "\${code}"
-}
+set +e
+"\${SSH[@]}" -tt "\${REMOTE}" \\
+  "chmod +x ~/\${REMOTE_DIR}/install.sh ~/\${REMOTE_DIR}/sensor_agent.py && sudo bash ~/\${REMOTE_DIR}/install.sh"
+INSTALL_CODE=\$?
+set -e
 
-echo "Terminé — agent room-sensor sur \${PI_IP}."
+if [ \$INSTALL_CODE -eq 1 ]; then
+  echo ""; echo "❌ install.sh a échoué (code \${INSTALL_CODE})."
+  echo "  Relance manuelle : ssh \${REMOTE} 'sudo bash ~/\${REMOTE_DIR}/install.sh'"
+  _pause_before_close; exit 1
+fi
+
+# ── Étape 3 : Reboot si nécessaire (exit 2) ───────────────────────────────────
+if [ \$INSTALL_CODE -eq 2 ]; then
+  echo ""; echo "──────────────────────────────────────────────"
+  echo "  ⚠ Reboot nécessaire pour activer I2C / SPI / I2S"
+  echo "→ Envoi de la commande sudo reboot..."
+  "\${SSH[@]}" "\${REMOTE}" "sudo reboot" 2>/dev/null || true
+  echo "  → Attente 10 s avant de sonder SSH..."
+  sleep 10
+  if ! wait_for_pi; then
+    echo "❌ Le Pi est resté inaccessible après 3 minutes."
+    echo "  Rebootez manuellement puis relancez le script."
+    _pause_before_close; exit 1
+  fi
+fi
+
+# ── Étape 4 : verify.sh ───────────────────────────────────────────────────────
+echo ""; echo "──────────────────────────────────────────────"
+echo "→ Étape 3/4 — Vérification des interfaces (verify.sh)..."
+echo ""
+set +e
+"\${SSH[@]}" -tt "\${REMOTE}" "bash ~/\${REMOTE_DIR}/verify.sh"
+VERIFY_CODE=\$?
+set -e
+[ \$VERIFY_CODE -ne 0 ] && echo "  ⚠ verify.sh a signalé des avertissements (voir ci-dessus)"
+
+# ── Étape 5 : Démarrage agent ─────────────────────────────────────────────────
+echo ""; echo "──────────────────────────────────────────────"
+echo "→ Étape 4/4 — Démarrage du service smartroom-agent..."
+set +e
+"\${SSH[@]}" "\${REMOTE}" \\
+  "sudo systemctl start smartroom-agent && sudo systemctl status smartroom-agent --no-pager -l"
+START_CODE=\$?
+set -e
+
+echo ""; echo "──────────────────────────────────────────────"
+if [ \$START_CODE -eq 0 ]; then
+  echo "  ✅ Déploiement terminé avec succès !"
+else
+  echo "  ⚠ Déploiement terminé — vérifier les logs"
+fi
+echo ""
+echo "  Logs en temps réel : ssh \${REMOTE} 'journalctl -fu smartroom-agent'"
+echo "  Relancer verify    : ssh \${REMOTE} 'bash ~/\${REMOTE_DIR}/verify.sh'"
+echo ""
 _pause_before_close
+exit \$([ \$START_CODE -eq 0 ] && echo 0 || echo 1)
 `;
 }

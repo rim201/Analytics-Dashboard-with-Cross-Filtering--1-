@@ -12,7 +12,6 @@ import {
 export function thresholdsForAggressiveness(aggressiveness: number) {
   const a = Math.min(10, Math.max(1, Math.round(aggressiveness)));
   return {
-    co2High: 620 + (10 - a) * 35,
     tempHigh: TEMP_IDEAL_MAX + (10 - a) * 0.08,
     tempLow: TEMP_IDEAL_MIN - (10 - a) * 0.08,
     lightHigh: LUX_IDEAL_MAX + (10 - a) * 15,
@@ -29,9 +28,8 @@ export type AiDashboardRec = {
 type RoomSlice = {
   name: string;
   temperature: number | null;
-  co2: number | null;
   light: number | null;
-  /** SDS011 PM2.5 (µg/m³) — utilisé si CO₂ absent. */
+  /** SDS011 PM2.5 (µg/m³). */
   pm25: number | null;
 };
 
@@ -48,25 +46,10 @@ export function buildAiRecommendationsFromRooms(
   const out: AiDashboardRec[] = [];
 
   for (const r of rooms) {
-    const has =
-      r.co2 != null || r.pm25 != null || r.temperature != null || r.light != null;
+    const has = r.pm25 != null || r.temperature != null || r.light != null;
     if (!has) continue;
 
-    if (r.co2 != null) {
-      if (r.co2 > t.co2High) {
-        out.push({
-          roomName: r.name,
-          text: `Increase ventilation: CO₂ around ${Math.round(r.co2)} ppm (target below ${Math.round(t.co2High)} ppm).`,
-          tone: 'blue',
-        });
-      } else if (a >= 5) {
-        out.push({
-          roomName: r.name,
-          text: `Air quality acceptable (CO₂ ${Math.round(r.co2)} ppm). Maintain current ventilation.`,
-          tone: 'emerald',
-        });
-      }
-    } else if (r.pm25 != null && a >= 4) {
+    if (r.pm25 != null && a >= 4) {
       if (r.pm25 > PM25_POLLUTED_GT) {
         out.push({
           roomName: r.name,
@@ -154,7 +137,10 @@ type SensorInput = {
   name: string;
   temperature: number | null;
   humidity: number | null;
+<<<<<<< HEAD
+=======
   co2: number | null;
+>>>>>>> de425048a4433d79704cfc35b86f357f42007b07
   noise: number | null;
   pm25: number | null;
 };
@@ -167,6 +153,8 @@ export function buildSensorAlertCandidates(rooms: SensorInput[]): SensorAlertCan
   const candidates: SensorAlertCandidate[] = [];
 
   for (const r of rooms) {
+<<<<<<< HEAD
+=======
     if (r.co2 != null) {
       if (r.co2 > 1500) {
         candidates.push({
@@ -187,6 +175,7 @@ export function buildSensorAlertCandidates(rooms: SensorInput[]): SensorAlertCan
       }
     }
 
+>>>>>>> de425048a4433d79704cfc35b86f357f42007b07
     if (r.temperature != null) {
       if (r.temperature > 30 || r.temperature < 15) {
         candidates.push({

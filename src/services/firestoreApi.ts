@@ -40,7 +40,6 @@ export type MeasurementRow = {
   timestamp: string;
   temperature: number | null;
   humidity: number | null;
-  co2: number | null;
   noise: number | null;
   light: number | null;
   /** SDS011 — particules fines (µg/m³). */
@@ -60,7 +59,6 @@ function mapFirestoreDataToMeasurementRow(x: Record<string, unknown>, timestampI
     timestamp: timestampIso,
     temperature: measurementNumericOrNull(x.temperature),
     humidity: measurementNumericOrNull(x.humidity),
-    co2: measurementNumericOrNull(x.co2),
     noise: measurementNumericOrNull(x.noise),
     light: measurementNumericOrNull(x.light),
     pm25: measurementNumericOrNull(x.pm25),
@@ -136,11 +134,9 @@ export type DashboardSummary = {
   /** Moyenne 24 h ; `null` si aucune mesure. */
   temperature: number | null;
   humidity: number | null;
-  co2: number | null;
   noise: number | null;
   light: number | null;
   temperatureData: { time: string; value: number }[];
-  co2Data: { time: string; value: number }[];
   lightData: { time: string; value: number }[];
   noiseData: { time: string; value: number }[];
   roomOverview: { total: number; available: number; occupied: number; maintenance: number };
@@ -301,6 +297,63 @@ export async function alertRejectResolution(alertId: string): Promise<void> {
       alertTitle: title,
     });
   }
+}
+
+/**
+ * Crée une alerte bruit dans Firestore si aucune alerte bruit ouverte n'existe déjà pour cette salle.
+ * Appeler quand le niveau sonore dépasse le seuil "Moyen" (≥ 35/100).
+ */
+export async function createNoiseAlert(
+  roomName: string,
+  noiseLevel: number,
+): Promise<void> {
+  const existing = await getDocs(
+    query(
+      collection(db, 'alerts'),
+      where('category', '==', 'Bruit'),
+      where('room', '==', roomName),
+      where('status', '==', 'open'),
+      limit(1),
+    ),
+  );
+  if (!existing.empty) return;
+
+  const isCritical = noiseLevel >= 65;
+  const label = isCritical ? 'Fort' : 'Moyen';
+  await addDoc(collection(db, 'alerts'), {
+    type: isCritical ? 'critical' : 'warning',
+    room: roomName,
+    title: `Niveau sonore élevé — ${roomName}`,
+    message: `Niveau sonore ${Math.round(noiseLevel)}/100 (${label}) détecté par INMP441. Vérifier la source de bruit.`,
+    category: 'Bruit',
+    status: 'open',
+    createdAt: Timestamp.now(),
+    updatedAt: Timestamp.now(),
+  });
+}
+
+export async function createSensorOfflineAlert(roomName: string): Promise<void> {
+  const existing = await getDocs(
+    query(
+      collection(db, 'alerts'),
+      where('category', '==', 'Capteur'),
+      where('room', '==', roomName),
+      where('status', '==', 'open'),
+      limit(1),
+    ),
+  );
+  if (!existing.empty) return;
+
+  await addDoc(collection(db, 'alerts'), {
+    type: 'warning',
+    room: roomName,
+    title: `Capteur hors ligne — ${roomName}`,
+    message: `Aucune mesure reçue depuis plus d'une heure dans la salle "${roomName}". Vérifier la connexion du Raspberry Pi et que le service sensor_agent est bien en cours d'exécution.`,
+    category: 'Capteur',
+    status: 'open',
+    createdAt: Timestamp.now(),
+    updatedAt: Timestamp.now(),
+  });
 }
 
 // —— Notifications in-app (cloche) — Realtime Database `inAppNotifications/{uid}/{id}` —— //
@@ -571,7 +624,6 @@ export type RoomListRow = {
   comfortScore: number;
   temperature: number | null;
   humidity: number | null;
-  co2: number | null;
   noise: number | null;
   light: number | null;
   pm25: number | null;
@@ -585,7 +637,6 @@ export async function listRoomsWithLatestMeasurements(): Promise<RoomListRow[]> 
       const m = await fetchLatestMeasurementRow(r.id);
       const temperature = m?.temperature ?? null;
       const humidity = m?.humidity ?? null;
-      const co2 = m?.co2 ?? null;
       const noise = m?.noise ?? null;
       const light = m?.light ?? null;
       const pm25 = m?.pm25 ?? null;
@@ -597,16 +648,9 @@ export async function listRoomsWithLatestMeasurements(): Promise<RoomListRow[]> 
         occupancy: r.occupancy,
         status: r.status,
         comfortScore:
-          computeComfortScoreFromSensors({
-            temperature,
-            humidity,
-            co2,
-            noise,
-            light,
-          }) ?? 0,
+          computeComfortScoreFromSensors({ temperature, humidity, noise, light }) ?? 0,
         temperature,
         humidity,
-        co2,
         noise,
         light,
         pm25,
@@ -739,7 +783,6 @@ export async function updateRoomLight(roomId: string, lightLux: number): Promise
     await setRoomMeasurementDoc(roomId, ts, {
       temperature: prev.temperature,
       humidity: prev.humidity,
-      co2: prev.co2,
       noise: prev.noise,
       light: clamped,
       pm25: prev.pm25,
@@ -752,20 +795,22 @@ export async function updateRoomLight(roomId: string, lightLux: number): Promise
     light: clamped,
     temperature: null,
     humidity: null,
-    co2: null,
     noise: null,
     pm25: null,
     pm10: null,
   });
 }
 
+<<<<<<< HEAD
+/** Un point d'historique capteurs : date (`timestamp`) + valeurs (température, humidité, bruit, lumière). */
+=======
 /** Un point d'historique capteurs : date (`timestamp`) + valeurs (température, humidité, CO₂, bruit, lumière). */
+>>>>>>> de425048a4433d79704cfc35b86f357f42007b07
 export async function appendRoomMeasurementSnapshot(
   roomId: string,
   values: {
     temperature: number;
     humidity: number;
-    co2: number;
     noise: number;
     light: number;
   },
@@ -775,7 +820,6 @@ export async function appendRoomMeasurementSnapshot(
   await setRoomMeasurementDoc(roomId, ts, {
     temperature: values.temperature,
     humidity: values.humidity,
-    co2: values.co2,
     noise: values.noise,
     light: values.light,
   });
@@ -797,7 +841,6 @@ export async function appendCurrentSnapshotsForAllRooms(): Promise<{
     await setRoomMeasurementDoc(r.id, t, {
       temperature: prev?.temperature ?? null,
       humidity: prev?.humidity ?? null,
-      co2: prev?.co2 ?? null,
       noise: prev?.noise ?? null,
       light: prev?.light ?? null,
       pm25: prev?.pm25 ?? null,
@@ -842,7 +885,6 @@ export async function appendCurrentSnapshotForRoomAndSignalLinkedDevices(roomId:
   await setRoomMeasurementDoc(rid, t, {
     temperature: prev?.temperature ?? null,
     humidity: prev?.humidity ?? null,
-    co2: prev?.co2 ?? null,
     noise: prev?.noise ?? null,
     light: prev?.light ?? null,
     pm25: prev?.pm25 ?? null,
@@ -1452,6 +1494,31 @@ export function subscribeDeviceLastUpdate(
   );
 }
 
+<<<<<<< HEAD
+/** Souscription temps réel au lastUpdate du device lié à une salle. */
+export function subscribeDeviceLastUpdateForRoom(
+  roomId: string,
+  onData: (lastUpdateMs: number | null) => void,
+): () => void {
+  const rid = roomId.trim();
+  return onSnapshot(
+    collection(db, 'devices'),
+    (snap) => {
+      for (const d of snap.docs) {
+        if (deviceRoomIdFromFirestore(d.data().roomId) === rid) {
+          const lu = d.data().lastUpdate;
+          onData(lu instanceof Timestamp ? lu.toMillis() : null);
+          return;
+        }
+      }
+      onData(null);
+    },
+    () => onData(null),
+  );
+}
+
+=======
+>>>>>>> de425048a4433d79704cfc35b86f357f42007b07
 // —— Measurements —— //
 
 export async function listMeasurements(roomId: string): Promise<MeasurementRow[]> {
@@ -1506,7 +1573,6 @@ type DashboardMeasRow = {
   ms: number;
   temperature: number | null;
   humidity: number | null;
-  co2: number | null;
   noise: number | null;
   light: number | null;
 };
@@ -1518,7 +1584,6 @@ function mapMeasurementDocToDashboardRow(x: Record<string, unknown>): DashboardM
     ms: date.getTime(),
     temperature: measurementNumericOrNull(x.temperature),
     humidity: measurementNumericOrNull(x.humidity),
-    co2: measurementNumericOrNull(x.co2),
     noise: measurementNumericOrNull(x.noise),
     light: measurementNumericOrNull(x.light),
   };
@@ -1573,13 +1638,11 @@ export async function fetchDashboardSummary(): Promise<DashboardSummary> {
 
   const temperatures = rows.map((r) => r.temperature).filter((v): v is number => v != null);
   const humidities = rows.map((r) => r.humidity).filter((v): v is number => v != null);
-  const co2s = rows.map((r) => r.co2).filter((v): v is number => v != null);
   const noises = rows.map((r) => r.noise).filter((v): v is number => v != null);
   const lights = rows.map((r) => r.light).filter((v): v is number => v != null);
 
   const temperature = temperatures.length > 0 ? averageNumbers(temperatures) : null;
   const humidity = humidities.length > 0 ? averageNumbers(humidities) : null;
-  const co2 = co2s.length > 0 ? averageNumbers(co2s) : null;
   const noise = noises.length > 0 ? averageNumbers(noises) : null;
   const light = lights.length > 0 ? averageNumbers(lights) : null;
 
@@ -1588,7 +1651,6 @@ export async function fetchDashboardSummary(): Promise<DashboardSummary> {
       computeComfortScoreFromSensors({
         temperature: r.temperature,
         humidity: r.humidity,
-        co2: r.co2,
         noise: r.noise,
         light: r.light,
       }),
@@ -1601,11 +1663,11 @@ export async function fetchDashboardSummary(): Promise<DashboardSummary> {
 
   const sinceMs = since.getTime();
   const startBucket = Math.floor(sinceMs / HOUR_MS) * HOUR_MS;
-  type BucketCell = { temps: number[]; co2s: number[]; lights: number[]; noises: number[] };
+  type BucketCell = { temps: number[]; lights: number[]; noises: number[] };
   const bucketMap = new Map<number, BucketCell>();
 
   for (let b = startBucket; b <= nowMs + HOUR_MS; b += HOUR_MS) {
-    bucketMap.set(b, { temps: [], co2s: [], lights: [], noises: [] });
+    bucketMap.set(b, { temps: [], lights: [], noises: [] });
   }
 
   for (const r of rows) {
@@ -1614,13 +1676,11 @@ export async function fetchDashboardSummary(): Promise<DashboardSummary> {
     const entry = bucketMap.get(b);
     if (!entry) continue;
     if (r.temperature != null) entry.temps.push(r.temperature);
-    if (r.co2 != null) entry.co2s.push(r.co2);
     if (r.light != null) entry.lights.push(r.light);
     if (r.noise != null) entry.noises.push(r.noise);
   }
 
   const temperatureData: { time: string; value: number }[] = [];
-  const co2Data: { time: string; value: number }[] = [];
   const lightData: { time: string; value: number }[] = [];
   const noiseData: { time: string; value: number }[] = [];
 
@@ -1632,9 +1692,6 @@ export async function fetchDashboardSummary(): Promise<DashboardSummary> {
     const label = `${d.getMonth() + 1}/${d.getDate()} ${String(d.getHours()).padStart(2, '0')}:00`;
     if (cell.temps.length > 0) {
       temperatureData.push({ time: label, value: averageNumbers(cell.temps) });
-    }
-    if (cell.co2s.length > 0) {
-      co2Data.push({ time: label, value: averageNumbers(cell.co2s) });
     }
     if (cell.lights.length > 0) {
       lightData.push({ time: label, value: averageNumbers(cell.lights) });
@@ -1648,11 +1705,9 @@ export async function fetchDashboardSummary(): Promise<DashboardSummary> {
     comfortScore,
     temperature,
     humidity,
-    co2,
     noise,
     light,
     temperatureData,
-    co2Data,
     lightData,
     noiseData,
     roomOverview: {
@@ -1856,7 +1911,6 @@ export async function seedFirestoreIfEmpty(): Promise<boolean> {
       await setRoomMeasurementDoc(ref.id, t, {
         temperature: 21 + Math.random() * 3,
         humidity: 40 + Math.random() * 15,
-        co2: 450 + Math.random() * 220,
         noise: 35 + Math.random() * 12,
         light: 400 + Math.random() * 100,
       });

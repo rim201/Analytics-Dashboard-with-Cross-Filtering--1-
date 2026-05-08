@@ -1,11 +1,14 @@
+<<<<<<< HEAD
+import { Thermometer, Volume2, Sun, Star, Brain, Droplets, AlertTriangle, X } from 'lucide-react';
+=======
 import { Thermometer, Wind, Volume2, Sun, Star, Brain, Droplets, AlertTriangle, X } from 'lucide-react';
+>>>>>>> de425048a4433d79704cfc35b86f357f42007b07
 import { LineChart, Line, AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { PageType } from '../App';
 import { buildAiRecommendationsFromRooms, buildSensorAlertCandidates, type AiDashboardRec } from '../services/aiRecommendations';
 import {
   comfortChipToneClass,
-  statusHigherIsWorse,
   statusHumidityPct,
   statusLux,
   statusNoiseDb,
@@ -86,6 +89,8 @@ export default function MainDashboard({ onNavigate }: MainDashboardProps) {
       format: (v: number) => `${Math.round(v)}%`,
     },
     {
+<<<<<<< HEAD
+=======
       key: 'co2' as const,
       label: t.dashboard.sensorCo2,
       unit: 'ppm',
@@ -96,6 +101,7 @@ export default function MainDashboard({ onNavigate }: MainDashboardProps) {
       format: (v: number) => `${Math.round(v)} ppm`,
     },
     {
+>>>>>>> de425048a4433d79704cfc35b86f357f42007b07
       key: 'noise' as const,
       label: t.dashboard.sensorNoise,
       unit: 'dB',
@@ -121,11 +127,9 @@ export default function MainDashboard({ onNavigate }: MainDashboardProps) {
     comfortScore: 0,
     temperature: null as number | null,
     humidity: null as number | null,
-    co2: null as number | null,
     noise: null as number | null,
     light: null as number | null,
     temperatureData: [] as { time: string; value: number }[],
-    co2Data: [] as { time: string; value: number }[],
     lightData: [] as { time: string; value: number }[],
     noiseData: [] as { time: string; value: number }[],
     roomOverview: { total: 0, available: 0, occupied: 0, maintenance: 0 },
@@ -153,11 +157,9 @@ export default function MainDashboard({ onNavigate }: MainDashboardProps) {
           comfortScore: data.comfortScore ?? 0,
           temperature: data.temperature ?? null,
           humidity: data.humidity ?? null,
-          co2: data.co2 ?? null,
           noise: data.noise ?? null,
           light: data.light ?? null,
           temperatureData: data.temperatureData ?? [],
-          co2Data: data.co2Data ?? [],
           lightData: data.lightData ?? [],
           noiseData: data.noiseData ?? [],
           roomOverview: data.roomOverview || { total: 0, available: 0, occupied: 0, maintenance: 0 },
@@ -168,7 +170,6 @@ export default function MainDashboard({ onNavigate }: MainDashboardProps) {
             rooms.map((r) => ({
               name: r.name,
               temperature: r.temperature,
-              co2: r.co2,
               light: r.light,
               pm25: r.pm25,
             })),
@@ -201,15 +202,24 @@ export default function MainDashboard({ onNavigate }: MainDashboardProps) {
   const dashStatus = useMemo(() => ({
     temperature: summary.temperature != null ? statusTemperature(summary.temperature) : null,
     humidity: summary.humidity != null ? statusHumidityPct(summary.humidity) : null,
+<<<<<<< HEAD
+    noise: summary.noise != null ? statusNoiseDb(summary.noise) : null,
+    light: summary.light != null ? statusLux(summary.light) : null,
+  }), [summary.temperature, summary.humidity, summary.noise, summary.light]);
+=======
     co2: summary.co2 != null ? statusHigherIsWorse(summary.co2, 500, 800) : null,
     noise: summary.noise != null ? statusNoiseDb(summary.noise) : null,
     light: summary.light != null ? statusLux(summary.light) : null,
   }), [summary.temperature, summary.humidity, summary.co2, summary.noise, summary.light]);
+>>>>>>> de425048a4433d79704cfc35b86f357f42007b07
 
   const sensorValues: Record<string, number | null> = {
     temperature: summary.temperature,
     humidity: summary.humidity,
+<<<<<<< HEAD
+=======
     co2: summary.co2,
+>>>>>>> de425048a4433d79704cfc35b86f357f42007b07
     noise: summary.noise,
     light: summary.light,
   };
@@ -217,7 +227,10 @@ export default function MainDashboard({ onNavigate }: MainDashboardProps) {
   const sensorStatuses: Record<string, ReturnType<typeof statusTemperature> | null> = {
     temperature: dashStatus.temperature,
     humidity: dashStatus.humidity,
+<<<<<<< HEAD
+=======
     co2: dashStatus.co2,
+>>>>>>> de425048a4433d79704cfc35b86f357f42007b07
     noise: dashStatus.noise,
     light: dashStatus.light,
   };
@@ -392,13 +405,19 @@ export default function MainDashboard({ onNavigate }: MainDashboardProps) {
           )}
         </div>
 
+<<<<<<< HEAD
+        {/* Light */}
+=======
         {/* CO2 */}
+>>>>>>> de425048a4433d79704cfc35b86f357f42007b07
         <div
           className="rounded-2xl p-6 chart-card"
           style={{ background: 'var(--card)', border: '1px solid var(--gray-200)', padding: '1.75rem' }}
         >
           <div className="mb-6">
             <h3 className="text-base font-semibold" style={{ color: 'var(--gray-900)' }}>
+<<<<<<< HEAD
+=======
               {t.dashboard.co2Trend}
             </h3>
             <p className="text-xs mt-0.5" style={{ color: 'var(--gray-500)' }}>
@@ -436,6 +455,7 @@ export default function MainDashboard({ onNavigate }: MainDashboardProps) {
         >
           <div className="mb-6">
             <h3 className="text-base font-semibold" style={{ color: 'var(--gray-900)' }}>
+>>>>>>> de425048a4433d79704cfc35b86f357f42007b07
               {t.dashboard.lightTrend}
             </h3>
             <p className="text-xs mt-0.5" style={{ color: 'var(--gray-500)' }}>

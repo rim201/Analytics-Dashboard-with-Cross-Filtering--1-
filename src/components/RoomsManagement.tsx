@@ -1,8 +1,7 @@
-import { Search, Filter, Thermometer, Wind, Volume2, Sun, Plus, Trash2, Droplets, Pencil, Factory } from 'lucide-react';
+import { Search, Filter, Thermometer, Volume2, Sun, Plus, Trash2, Droplets, Pencil, Factory } from 'lucide-react';
 import React, { useEffect, useRef, useState } from 'react';
 import {
   comfortChipToneClass,
-  statusHigherIsWorse,
   statusHumidityPct,
   statusLux,
   statusNoiseDb,
@@ -615,6 +614,8 @@ export default function RoomsManagement({ onRoomSelect, isAdmin = false }: Rooms
                       {room.humidity != null ? `${Math.round(room.humidity)}%` : '--'}
                     </p>
                     {comfortPill(room.humidity, statusHumidityPct, lang)}
+<<<<<<< HEAD
+=======
                   </div>
                 </div>
                 <div className="flex items-center space-x-2">
@@ -627,6 +628,7 @@ export default function RoomsManagement({ onRoomSelect, isAdmin = false }: Rooms
                       {room.co2 != null ? `${Math.round(room.co2)} ppm` : '--'}
                     </p>
                     {comfortPill(room.co2, (v) => statusHigherIsWorse(v, 500, 800), lang)}
+>>>>>>> de425048a4433d79704cfc35b86f357f42007b07
                   </div>
                 </div>
                 <div className="flex items-center space-x-2">

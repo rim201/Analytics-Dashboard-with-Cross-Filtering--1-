@@ -1,15 +1,17 @@
-import React, { useState, useEffect, useMemo, useCallback } from 'react';
+import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import {
   ArrowLeft,
   Thermometer,
-  Wind,
   Volume2,
   Sun,
   Droplets,
   Brain,
   Factory,
   Eye,
+<<<<<<< HEAD
+=======
   EyeOff,
+>>>>>>> de425048a4433d79704cfc35b86f357f42007b07
 } from 'lucide-react';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
 import '../styles/custom.css';
@@ -19,8 +21,9 @@ import {
   PM25_POLLUTED_GT,
   PM10_GOOD_LT,
   PM10_POLLUTED_GT,
+  NOISE_CALM_LT,
+  NOISE_OK_LT,
   comfortChipToneClass,
-  statusHigherIsWorse,
   statusHumidityPct,
   statusLux,
   statusNoiseDb,
@@ -33,6 +36,8 @@ import {
   subscribeMeasurements,
   subscribeRoomById,
   updateRoomLight,
+  createNoiseAlert,
+  createSensorOfflineAlert,
   type MeasurementRow,
 } from '../services/firestoreApi';
 import { useLang } from '../i18n/LanguageContext';
@@ -40,7 +45,6 @@ import { translateChipLabel, translations } from '../i18n/translations';
 
 const LUX_MIN = 150;
 const LUX_MAX = 1000;
-const LUX_STEP = 10;
 
 interface RoomDetailsProps {
   roomId: string | null;
@@ -64,23 +68,20 @@ export default function RoomDetails({ roomId, onBack, isAdmin = false }: RoomDet
   const [roomInfo, setRoomInfo] = useState<RoomInfo | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [dragLightLux, setDragLightLux] = useState<number | null>(null);
-  const [lightSaving, setLightSaving] = useState(false);
-  const [lightError, setLightError] = useState<string | null>(null);
   const [aiAggressiveness, setAiAggressiveness] = useState(7);
+<<<<<<< HEAD
+=======
   const [showLightControl, setShowLightControl] = useState(false);
+>>>>>>> de425048a4433d79704cfc35b86f357f42007b07
   const numericRoomId = roomId?.replace(/^room-/, '') ?? '';
+  const lastNoiseAlertRef = useRef<number>(0);
+  const lastOfflineAlertRef = useRef<number>(0);
 
   useEffect(() => {
     void getAiConfig()
       .then(({ settings }) => setAiAggressiveness(settings.aggressiveness))
       .catch(() => undefined);
   }, []);
-
-  useEffect(() => {
-    setDragLightLux(null);
-    setLightError(null);
-  }, [numericRoomId]);
 
   useEffect(() => {
     if (!numericRoomId) {
@@ -131,6 +132,10 @@ export default function RoomDetails({ roomId, onBack, isAdmin = false }: RoomDet
     return unsub;
   }, [numericRoomId]);
 
+<<<<<<< HEAD
+
+=======
+>>>>>>> de425048a4433d79704cfc35b86f357f42007b07
   const latest = useMemo(() => {
     if (measurements.length === 0) return null;
     return measurements.reduce((best, m) => {
@@ -139,6 +144,24 @@ export default function RoomDetails({ roomId, onBack, isAdmin = false }: RoomDet
       return tm >= tb ? m : best;
     });
   }, [measurements]);
+
+  useEffect(() => {
+    if (!roomInfo || latest?.noise == null || latest.noise < NOISE_CALM_LT) return;
+    const COOLDOWN = 30 * 60 * 1000;
+    if (Date.now() - lastNoiseAlertRef.current < COOLDOWN) return;
+    lastNoiseAlertRef.current = Date.now();
+    void createNoiseAlert(roomInfo.name, latest.noise);
+  }, [latest?.noise, roomInfo]);
+
+  useEffect(() => {
+    if (!roomInfo || !latest?.timestamp) return;
+    const diffMs = Date.now() - new Date(latest.timestamp).getTime();
+    if (diffMs < 60 * 60_000) return;
+    const COOLDOWN = 60 * 60_000;
+    if (Date.now() - lastOfflineAlertRef.current < COOLDOWN) return;
+    lastOfflineAlertRef.current = Date.now();
+    void createSensorOfflineAlert(roomInfo.name);
+  }, [latest?.timestamp, roomInfo]);
 
   const chartData = useMemo(() => {
     const chronological = [...measurements].reverse();
@@ -149,7 +172,6 @@ export default function RoomDetails({ roomId, onBack, isAdmin = false }: RoomDet
         time,
         temperature: m.temperature ?? undefined,
         humidity: m.humidity ?? undefined,
-        co2: m.co2 ?? undefined,
         noise: m.noise ?? undefined,
         light: m.light ?? undefined,
         pm25: m.pm25 ?? undefined,
@@ -159,6 +181,36 @@ export default function RoomDetails({ roomId, onBack, isAdmin = false }: RoomDet
   }, [measurements]);
 
   const hasChartData = chartData.length > 0;
+  const hasTemperatureData = chartData.some((d) => d.temperature != null);
+  const hasNoiseData = chartData.some((d) => d.noise != null);
+  const hasLightData = chartData.some((d) => d.light != null);
+  // Capteur analogique 3 broches : valeurs binaires 0 (sombre) / 100 (claire)
+  const isAnalogLight = hasLightData && chartData
+    .filter((d) => d.light != null)
+    .every((d) => d.light === 0 || d.light === 100);
+  const formatLightValue = (val: number | null | undefined): string => {
+    if (val == null) return '--';
+    if (val === 0) return lang === 'fr' ? 'Sombre' : 'Dark';
+    if (val === 100) return lang === 'fr' ? 'Claire' : 'Bright';
+    return `${Math.round(val)}`;
+  };
+  const hasPm25Data = chartData.some((d) => d.pm25 != null);
+
+  function formatTimeSince(iso: string): string {
+    const diffMs = Date.now() - new Date(iso).getTime();
+    const diffMin = Math.floor(diffMs / 60_000);
+    if (diffMin < 1) return t.motionJustNow;
+    if (diffMin < 60) return t.motionMinutesAgo(diffMin);
+    return t.motionHoursAgo(Math.floor(diffMin / 60));
+  }
+
+  function formatLastSync(ms: number): string {
+    const d = new Date(ms);
+    const time = `${d.getHours().toString().padStart(2,'0')}:${d.getMinutes().toString().padStart(2,'0')}:${d.getSeconds().toString().padStart(2,'0')}`;
+    const today = new Date();
+    if (d.toDateString() === today.toDateString()) return time;
+    return `${d.getDate().toString().padStart(2,'0')}/${(d.getMonth()+1).toString().padStart(2,'0')} ${time}`;
+  }
 
   function formatTimeSince(iso: string): string {
     const diffMs = Date.now() - new Date(iso).getTime();
@@ -184,13 +236,14 @@ export default function RoomDetails({ roomId, onBack, isAdmin = false }: RoomDet
       computeComfortScoreFromSensors({
         temperature: latest?.temperature,
         humidity: latest?.humidity,
-        co2: latest?.co2,
         noise: latest?.noise,
         light: latest?.light,
       }),
     [latest],
   );
 
+<<<<<<< HEAD
+=======
   const clampLux = useCallback((v: number) => Math.min(LUX_MAX, Math.max(LUX_MIN, Math.round(v))), []);
 
   const sliderLightLux =
@@ -214,6 +267,7 @@ export default function RoomDetails({ roomId, onBack, isAdmin = false }: RoomDet
     [numericRoomId, isAdmin, lang],
   );
 
+>>>>>>> de425048a4433d79704cfc35b86f357f42007b07
   const aiInsights = useMemo(() => {
     const ai = translations[lang].ai;
     const thr = thresholdsForAggressiveness(aiAggressiveness);
@@ -230,6 +284,9 @@ export default function RoomDetails({ roomId, onBack, isAdmin = false }: RoomDet
       ];
     }
 
+<<<<<<< HEAD
+    if (latest.pm25 != null) {
+=======
     if (latest.co2 != null) {
       if (latest.co2 > thr.co2High) {
         messages.push({
@@ -245,6 +302,7 @@ export default function RoomDetails({ roomId, onBack, isAdmin = false }: RoomDet
         });
       }
     } else if (latest.pm25 != null) {
+>>>>>>> de425048a4433d79704cfc35b86f357f42007b07
       const pm = latest.pm25;
       if (pm > PM25_POLLUTED_GT) {
         messages.push({
@@ -327,6 +385,31 @@ export default function RoomDetails({ roomId, onBack, isAdmin = false }: RoomDet
         messages.push({
           title: ai.brightnessTitle,
           text: ai.brightnessIdealText(name, Math.round(latest.light)),
+<<<<<<< HEAD
+          tone: 'green',
+        });
+      }
+    }
+
+    if (latest.noise != null) {
+      if (latest.noise >= NOISE_OK_LT) {
+        messages.push({
+          title: ai.noiseAlertTitle,
+          text: ai.noiseAlertText(name, Math.round(latest.noise)),
+          tone: 'blue',
+        });
+      } else if (latest.noise >= NOISE_CALM_LT) {
+        messages.push({
+          title: ai.noiseMediumTitle,
+          text: ai.noiseMediumText(name, Math.round(latest.noise)),
+          tone: 'blue',
+        });
+      } else {
+        messages.push({
+          title: ai.noiseCalmTitle,
+          text: ai.noiseCalmText(name, Math.round(latest.noise)),
+=======
+>>>>>>> de425048a4433d79704cfc35b86f357f42007b07
           tone: 'green',
         });
       }
@@ -348,7 +431,6 @@ export default function RoomDetails({ roomId, onBack, isAdmin = false }: RoomDet
     return {
       temperature: latest.temperature != null ? statusTemperature(latest.temperature) : null,
       humidity: latest.humidity != null ? statusHumidityPct(latest.humidity) : null,
-      co2: latest.co2 != null ? statusHigherIsWorse(latest.co2, 500, 800) : null,
       noise: latest.noise != null ? statusNoiseDb(latest.noise) : null,
       light: latest.light != null ? statusLux(latest.light) : null,
       pm25: latest.pm25 != null ? statusPm25(latest.pm25) : null,
@@ -359,7 +441,11 @@ export default function RoomDetails({ roomId, onBack, isAdmin = false }: RoomDet
   return (
     <div className="space-y-6">
       {/* Back Button and Header */}
+<<<<<<< HEAD
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+=======
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+>>>>>>> de425048a4433d79704cfc35b86f357f42007b07
         <div className="flex items-center space-x-4 min-w-0">
           <button
             onClick={onBack}
@@ -369,7 +455,11 @@ export default function RoomDetails({ roomId, onBack, isAdmin = false }: RoomDet
           </button>
           <div className="flex-1 min-w-0">
             <h2 className="text-xl sm:text-2xl font-bold text-gray-900 truncate">{roomMeta.name}</h2>
+<<<<<<< HEAD
+            <div className="flex flex-wrap items-center gap-3 mt-2">
+=======
             <div className="flex flex-wrap items-center gap-2 mt-1">
+>>>>>>> de425048a4433d79704cfc35b86f357f42007b07
               <div className="flex items-center space-x-2">
                 <div className={`w-2 h-2 rounded-full shrink-0 ${roomMeta.status === 'occupied' ? 'bg-blue-500' : 'bg-emerald-500'}`}></div>
                 <span className="text-sm text-gray-600 capitalize">
@@ -382,9 +472,30 @@ export default function RoomDetails({ roomId, onBack, isAdmin = false }: RoomDet
               {roomMeta.lastMotionAt && (
                 <div className="flex items-center gap-1 px-2 py-1 bg-gray-50 text-gray-500 rounded-full text-xs border border-gray-200">
                   <Eye className="w-3 h-3 shrink-0" />
+<<<<<<< HEAD
+                  <span>{t.lastMotion} : {formatLastSync(new Date(roomMeta.lastMotionAt).getTime())}</span>
+                </div>
+              )}
+              {latest?.timestamp != null && (() => {
+                const ms = new Date(latest.timestamp).getTime();
+                return (
+                  <div className={`flex items-center gap-1 px-2 py-1 rounded-full text-xs border ${
+                    Date.now() - ms < 10 * 60_000
+                      ? 'bg-emerald-50 text-emerald-600 border-emerald-200'
+                      : Date.now() - ms < 60 * 60_000
+                      ? 'bg-amber-50 text-amber-600 border-amber-200'
+                      : 'bg-red-50 text-red-500 border-red-200'
+                  }`}>
+                    <span className="w-1.5 h-1.5 rounded-full bg-current shrink-0" />
+                    <span>{lang === 'fr' ? 'Dernière mesure' : 'Last reading'} : {formatLastSync(ms)}</span>
+                  </div>
+                );
+              })()}
+=======
                   <span>{t.lastMotion} : {formatTimeSince(roomMeta.lastMotionAt)}</span>
                 </div>
               )}
+>>>>>>> de425048a4433d79704cfc35b86f357f42007b07
             </div>
           </div>
         </div>
@@ -444,6 +555,8 @@ export default function RoomDetails({ roomId, onBack, isAdmin = false }: RoomDet
             {latest?.humidity != null ? `${Math.round(latest.humidity)}%` : '--'}
           </div>
           <div className="text-sm text-gray-500">{t.humidity}</div>
+<<<<<<< HEAD
+=======
         </div>
 
         {/* CO2 */}
@@ -464,6 +577,7 @@ export default function RoomDetails({ roomId, onBack, isAdmin = false }: RoomDet
             {latest?.co2 != null ? Math.round(latest.co2) : '--'}
           </div>
           <div className="text-sm text-gray-500">{t.co2}</div>
+>>>>>>> de425048a4433d79704cfc35b86f357f42007b07
         </div>
 
         {/* Noise */}
@@ -481,9 +595,13 @@ export default function RoomDetails({ roomId, onBack, isAdmin = false }: RoomDet
             )}
           </div>
           <div className="text-3xl font-bold text-gray-900 mb-1 tabular-nums">
-            {latest?.noise != null ? Math.round(latest.noise) : '--'}
+            {latest?.noise != null ? `${Math.round(latest.noise)} / 100` : '--'}
           </div>
+<<<<<<< HEAD
+          <div className="text-sm text-gray-500">{t.noise} · INMP441</div>
+=======
           <div className="text-sm text-gray-500">{t.noise}</div>
+>>>>>>> de425048a4433d79704cfc35b86f357f42007b07
         </div>
 
         {/* Light */}
@@ -501,8 +619,11 @@ export default function RoomDetails({ roomId, onBack, isAdmin = false }: RoomDet
             )}
           </div>
           <div className="text-3xl font-bold text-gray-900 mb-1 tabular-nums">
-            {latest?.light != null ? Math.round(latest.light) : '--'}
+            {formatLightValue(latest?.light)}
           </div>
+<<<<<<< HEAD
+          <div className="text-sm text-gray-500">{t.light}</div>
+=======
           <div className="flex items-center justify-between">
             <div className="text-sm text-gray-500">{t.light}</div>
             {isAdmin && numericRoomId ? (
@@ -548,6 +669,7 @@ export default function RoomDetails({ roomId, onBack, isAdmin = false }: RoomDet
               )}
             </div>
           ) : null}
+>>>>>>> de425048a4433d79704cfc35b86f357f42007b07
         </div>
       </div>
 
@@ -604,14 +726,18 @@ export default function RoomDetails({ roomId, onBack, isAdmin = false }: RoomDet
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         <div className="bg-white rounded-2xl p-6 shadow-lg border border-gray-100">
           <h3 className="font-semibold text-gray-900 mb-4">{t.temperatureChart}</h3>
+<<<<<<< HEAD
+          {hasTemperatureData ? (
+=======
           {hasChartData ? (
+>>>>>>> de425048a4433d79704cfc35b86f357f42007b07
             <ResponsiveContainer width="100%" height={200}>
               <LineChart data={chartData}>
                 <CartesianGrid strokeDasharray="3 3" stroke="#f3f4f6" />
                 <XAxis dataKey="time" stroke="#9ca3af" fontSize={12} />
                 <YAxis stroke="#9ca3af" fontSize={12} domain={['auto', 'auto']} />
                 <Tooltip />
-                <Line type="monotone" dataKey="temperature" stroke="#f97316" strokeWidth={2} dot={false} />
+                <Line connectNulls type="monotone" dataKey="temperature" stroke="#f97316" strokeWidth={2} dot={false} />
               </LineChart>
             </ResponsiveContainer>
           ) : (
@@ -620,15 +746,20 @@ export default function RoomDetails({ roomId, onBack, isAdmin = false }: RoomDet
         </div>
 
         <div className="bg-white rounded-2xl p-6 shadow-lg border border-gray-100">
+<<<<<<< HEAD
+          <h3 className="font-semibold text-gray-900 mb-4">{t.noiseChart}</h3>
+          {hasNoiseData ? (
+=======
           <h3 className="font-semibold text-gray-900 mb-4">{t.co2Chart}</h3>
           {hasChartData ? (
+>>>>>>> de425048a4433d79704cfc35b86f357f42007b07
             <ResponsiveContainer width="100%" height={200}>
               <LineChart data={chartData}>
                 <CartesianGrid strokeDasharray="3 3" stroke="#f3f4f6" />
                 <XAxis dataKey="time" stroke="#9ca3af" fontSize={12} />
-                <YAxis stroke="#9ca3af" fontSize={12} domain={['auto', 'auto']} />
+                <YAxis stroke="#9ca3af" fontSize={12} domain={[0, 100]} />
                 <Tooltip />
-                <Line type="monotone" dataKey="co2" stroke="#3b82f6" strokeWidth={2} dot={false} />
+                <Line connectNulls type="monotone" dataKey="noise" stroke="#a855f7" strokeWidth={2} dot={false} />
               </LineChart>
             </ResponsiveContainer>
           ) : (
@@ -637,15 +768,32 @@ export default function RoomDetails({ roomId, onBack, isAdmin = false }: RoomDet
         </div>
 
         <div className="bg-white rounded-2xl p-6 shadow-lg border border-gray-100">
+<<<<<<< HEAD
+          <h3 className="font-semibold text-gray-900 mb-4">{t.lightChart}</h3>
+          {hasLightData ? (
+=======
           <h3 className="font-semibold text-gray-900 mb-4">{t.noiseChart}</h3>
           {hasChartData ? (
+>>>>>>> de425048a4433d79704cfc35b86f357f42007b07
             <ResponsiveContainer width="100%" height={200}>
               <LineChart data={chartData}>
                 <CartesianGrid strokeDasharray="3 3" stroke="#f3f4f6" />
                 <XAxis dataKey="time" stroke="#9ca3af" fontSize={12} />
-                <YAxis stroke="#9ca3af" fontSize={12} domain={['auto', 'auto']} />
-                <Tooltip />
-                <Line type="monotone" dataKey="noise" stroke="#a855f7" strokeWidth={2} dot={false} />
+                <YAxis
+                  stroke="#9ca3af"
+                  fontSize={12}
+                  domain={isAnalogLight ? [-10, 110] : ['auto', 'auto']}
+                  ticks={isAnalogLight ? [0, 100] : undefined}
+                  tickFormatter={isAnalogLight
+                    ? (v: number) => v === 0 ? (lang === 'fr' ? 'Sombre' : 'Dark') : v === 100 ? (lang === 'fr' ? 'Claire' : 'Bright') : `${v}`
+                    : undefined}
+                />
+                <Tooltip
+                  formatter={(val: number) => isAnalogLight
+                    ? [val === 0 ? (lang === 'fr' ? 'Sombre' : 'Dark') : (lang === 'fr' ? 'Claire' : 'Bright'), t.light]
+                    : [`${Math.round(val)} lux`, t.light]}
+                />
+                <Line connectNulls type="monotone" dataKey="light" stroke="#f59e0b" strokeWidth={2} dot={false} />
               </LineChart>
             </ResponsiveContainer>
           ) : (
@@ -654,14 +802,22 @@ export default function RoomDetails({ roomId, onBack, isAdmin = false }: RoomDet
         </div>
 
         <div className="bg-white rounded-2xl p-6 shadow-lg border border-gray-100">
+<<<<<<< HEAD
+          <h3 className="font-semibold text-gray-900 mb-4">{t.pm25Chart}</h3>
+          {hasPm25Data ? (
+=======
           <h3 className="font-semibold text-gray-900 mb-4">{t.lightChart}</h3>
           {hasChartData ? (
+>>>>>>> de425048a4433d79704cfc35b86f357f42007b07
             <ResponsiveContainer width="100%" height={200}>
               <LineChart data={chartData}>
                 <CartesianGrid strokeDasharray="3 3" stroke="#f3f4f6" />
                 <XAxis dataKey="time" stroke="#9ca3af" fontSize={12} />
                 <YAxis stroke="#9ca3af" fontSize={12} domain={['auto', 'auto']} />
                 <Tooltip />
+<<<<<<< HEAD
+                <Line connectNulls type="monotone" dataKey="pm25" stroke="#64748b" strokeWidth={2} dot={false} />
+=======
                 <Line type="monotone" dataKey="light" stroke="#f59e0b" strokeWidth={2} dot={false} />
               </LineChart>
             </ResponsiveContainer>
@@ -680,6 +836,7 @@ export default function RoomDetails({ roomId, onBack, isAdmin = false }: RoomDet
                 <YAxis stroke="#9ca3af" fontSize={12} domain={['auto', 'auto']} />
                 <Tooltip />
                 <Line type="monotone" dataKey="pm25" stroke="#64748b" strokeWidth={2} dot={false} />
+>>>>>>> de425048a4433d79704cfc35b86f357f42007b07
               </LineChart>
             </ResponsiveContainer>
           ) : (

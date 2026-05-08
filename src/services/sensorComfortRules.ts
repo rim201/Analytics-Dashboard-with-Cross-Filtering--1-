@@ -11,9 +11,9 @@ export const TEMP_IDEAL_MAX = 24;
 export const LUX_IDEAL_MIN = 300;
 export const LUX_IDEAL_MAX = 500;
 
-/** dB : calme < 40 ; acceptable 40 ≤ dB < 60 ; bruyant ≥ 60. */
-export const NOISE_CALM_LT = 40;
-export const NOISE_OK_LT = 60;
+/** Niveau sonore 0-100 (RMS log, INMP441) : calme < 35 ; moyen 35–65 ; fort ≥ 65. */
+export const NOISE_CALM_LT = 35;
+export const NOISE_OK_LT = 65;
 
 /** Humidité relative (%) : zone confort courante intérieur. */
 export const HUMIDITY_IDEAL_MIN = 40;
@@ -58,11 +58,11 @@ export function statusLux(v: number): ComfortStatusChip {
   return { color: 'red', label: 'Hors plage' };
 }
 
-/** < 40 calme ; 40 ≤ v < 60 acceptable ; ≥ 60 bruyant. */
+/** Niveau 0-100 (INMP441 log-RMS) : calme < 35 ; moyen 35-65 ; fort >= 65. */
 export function statusNoiseDb(v: number): ComfortStatusChip {
-  if (v < NOISE_CALM_LT) return { color: 'emerald', label: 'Calme \u2705' };
-  if (v < NOISE_OK_LT) return { color: 'amber', label: 'Acceptable \u26A0\uFE0F' };
-  return { color: 'red', label: 'Bruyant \u274C' };
+  if (v < NOISE_CALM_LT) return { color: 'emerald', label: 'Calme' };
+  if (v < NOISE_OK_LT) return { color: 'amber', label: 'Moyen' };
+  return { color: 'red', label: 'Fort' };
 }
 
 /**

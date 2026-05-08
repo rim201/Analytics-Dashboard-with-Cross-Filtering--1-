@@ -26,6 +26,7 @@ import {
   signOutSession,
   type UserProfile,
 } from './services/auth';
+import { listRooms } from './services/firestoreApi';
 
 export type PageType = 
   | 'login' 
@@ -166,6 +167,31 @@ function AppInner() {
   const handleNavigate = (page: PageType) => {
     if (page === 'settings' && !isAdmin) return;
     if (page === 'alerts' && !canAccessAlerts) return;
+    if (page === 'room-details') {
+      void (async () => {
+        try {
+          const rooms = await listRooms();
+          if (rooms.length === 0) {
+            setCurrentPage('rooms');
+            setSidebarOpen(false);
+            return;
+          }
+          // Choisir la room avec le mouvement le plus récent, sinon la première par nom
+          const best = rooms.reduce((a, b) => {
+            if (!a.lastMotionAt && !b.lastMotionAt) return a;
+            if (!a.lastMotionAt) return b;
+            if (!b.lastMotionAt) return a;
+            return new Date(b.lastMotionAt) > new Date(a.lastMotionAt) ? b : a;
+          });
+          setSelectedRoomId(best.id);
+          setCurrentPage('room-details');
+        } catch {
+          setCurrentPage('rooms');
+        }
+        setSidebarOpen(false);
+      })();
+      return;
+    }
     setCurrentPage(page);
     setSidebarOpen(false);
   };

@@ -1,0 +1,24 @@
+{
+  "firebase": {
+    "project_id": "analytics-dashboard-569c9"
+  },
+  "room_id": "1",
+  "interval_seconds": 300,
+  "sensors": {
+    "dht22_pin": 4,
+    "pir_pin": 17,
+    "bh1750_addr": 35,
+    "bh1750_i2c_bus": 20,
+    "inmp441_device": null,
+    "inmp441_samplerate": 16000,
+    "inmp441_duration": 1.0,
+    "sds011_port": "/dev/ttyUSB0",
+    "mq135_ads1115_channel": 0
+  },
+  "noise_alerts": {
+    "enabled": true,
+    "medium_threshold": 35,
+    "loud_threshold": 65,
+    "cooldown_minutes": 30
+  }
+}

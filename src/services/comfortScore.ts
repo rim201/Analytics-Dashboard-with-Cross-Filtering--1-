@@ -21,13 +21,12 @@ function clampScore(n: number): number {
 export function computeComfortScoreFromSensors(params: {
   temperature?: number | null;
   humidity?: number | null;
-  co2?: number | null;
   noise?: number | null;
   light?: number | null;
 }): number | null {
   const parts: number[] = [];
 
-  const { temperature: t, humidity: h, co2: c, noise: n, light: l } = params;
+  const { temperature: t, humidity: h, noise: n, light: l } = params;
 
   if (t != null && Number.isFinite(t)) {
     if (t >= TEMP_IDEAL_MIN && t <= TEMP_IDEAL_MAX) {
@@ -44,9 +43,6 @@ export function computeComfortScoreFromSensors(params: {
       const dist = h < HUMIDITY_IDEAL_MIN ? HUMIDITY_IDEAL_MIN - h : h - HUMIDITY_IDEAL_MAX;
       parts.push(clampScore(100 - dist * 2.8));
     }
-  }
-  if (c != null && Number.isFinite(c)) {
-    parts.push(clampScore(100 - Math.max(0, (c - 400) / 10)));
   }
   if (n != null && Number.isFinite(n)) {
     if (n < NOISE_CALM_LT) {

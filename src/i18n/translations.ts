@@ -3,10 +3,13 @@ export type Lang = 'en' | 'fr';
 interface AiTranslations {
   noMeasurementsTitle: string;
   noMeasurementsText: (name: string) => string;
+<<<<<<< HEAD
+=======
   airQualityAlertTitle: string;
   airQualityAlertText: (name: string, co2: number, threshold: number) => string;
   airQualityStableTitle: string;
   airQualityStableText: (name: string, co2: number) => string;
+>>>>>>> de425048a4433d79704cfc35b86f357f42007b07
   pm25Title: string;
   pm25PollutedText: (name: string, pm: string, threshold: number) => string;
   pm25ModerateText: (name: string, pm: string, threshold: number) => string;
@@ -25,6 +28,15 @@ interface AiTranslations {
   brightnessHighText: (name: string, lux: number) => string;
   brightnessLowText: (name: string, lux: number) => string;
   brightnessIdealText: (name: string, lux: number) => string;
+<<<<<<< HEAD
+  noiseAlertTitle: string;
+  noiseAlertText: (name: string, level: number) => string;
+  noiseMediumTitle: string;
+  noiseMediumText: (name: string, level: number) => string;
+  noiseCalmTitle: string;
+  noiseCalmText: (name: string, level: number) => string;
+=======
+>>>>>>> de425048a4433d79704cfc35b86f357f42007b07
   sensorDataTitle: string;
   sensorDataText: (name: string) => string;
 }
@@ -86,13 +98,19 @@ interface DashboardTranslations {
   noDataYet: string;
   sensorTemp: string;
   sensorHumidity: string;
+<<<<<<< HEAD
+=======
   sensorCo2: string;
+>>>>>>> de425048a4433d79704cfc35b86f357f42007b07
   sensorNoise: string;
   sensorLight: string;
   available: (n: number) => string;
   occupied: (n: number) => string;
   temperatureTrend: string;
+<<<<<<< HEAD
+=======
   co2Trend: string;
+>>>>>>> de425048a4433d79704cfc35b86f357f42007b07
   lightTrend: string;
   noiseTrend: string;
   chartSubtitle: string;
@@ -147,7 +165,10 @@ interface RoomsTranslations {
   deleteAriaLabel: (roomName: string) => string;
   sensorTemp: string;
   sensorHumidity: string;
+<<<<<<< HEAD
+=======
   sensorCo2: string;
+>>>>>>> de425048a4433d79704cfc35b86f357f42007b07
   sensorNoise: string;
   sensorLight: string;
   sensorPm25: string;
@@ -245,14 +266,20 @@ export interface Translations {
   aiAdjusting: string;
   temperature: string;
   humidity: string;
+<<<<<<< HEAD
+=======
   co2: string;
+>>>>>>> de425048a4433d79704cfc35b86f357f42007b07
   noise: string;
   light: string;
   lightSliderLabel: (min: number, max: number) => string;
   lightSaveError: string;
   loadingMeasurements: string;
   temperatureChart: string;
+<<<<<<< HEAD
+=======
   co2Chart: string;
+>>>>>>> de425048a4433d79704cfc35b86f357f42007b07
   noiseChart: string;
   lightChart: string;
   pm25Chart: string;
@@ -343,14 +370,21 @@ export const translations: Record<Lang, Translations> = {
     aiAdjusting: 'Adjusting air quality and temperature for maximum comfort',
     temperature: 'Temperature',
     humidity: 'Humidity',
+<<<<<<< HEAD
+    noise: 'Sound Level',
+=======
     co2: 'CO₂ (ppm)',
     noise: 'Noise (dB)',
+>>>>>>> de425048a4433d79704cfc35b86f357f42007b07
     light: 'Light (lux)',
     lightSliderLabel: (min, max) => `Target ${min}–${max} lux (this room)`,
     lightSaveError: 'Unable to save. Please try again.',
     loadingMeasurements: 'Loading measurements…',
     temperatureChart: 'Temperature (24h)',
+<<<<<<< HEAD
+=======
     co2Chart: 'CO₂ Level (24h)',
+>>>>>>> de425048a4433d79704cfc35b86f357f42007b07
     noiseChart: 'Noise Level (24h)',
     lightChart: 'Light Intensity (24h)',
     pm25Chart: 'PM2.5 (24h)',
@@ -370,12 +404,15 @@ export const translations: Record<Lang, Translations> = {
       noMeasurementsTitle: 'No measurements yet',
       noMeasurementsText: (name) =>
         `${name}: Charts and live KPIs use the latest saved point by date and time. Add measurements from room updates or admin capture.`,
+<<<<<<< HEAD
+=======
       airQualityAlertTitle: 'Air Quality Alert',
       airQualityAlertText: (name, co2, threshold) =>
         `${name}: CO₂ at ${co2} ppm (above ~${threshold} ppm). Increasing ventilation to keep focus and comfort at optimal levels.`,
       airQualityStableTitle: 'Air Quality Stable',
       airQualityStableText: (name, co2) =>
         `${name}: CO₂ is under control (${co2} ppm). Ventilation remains in efficient mode.`,
+>>>>>>> de425048a4433d79704cfc35b86f357f42007b07
       pm25Title: 'PM2.5 Particles',
       pm25PollutedText: (name, pm, threshold) =>
         `${name}: polluted air (PM2.5 ~${pm} µg/m³, threshold > ${threshold}). Ventilation or filtration (SDS011).`,
@@ -406,6 +443,18 @@ export const translations: Record<Lang, Translations> = {
         `${name}: ${lux} lux — below the ideal zone 300–500 lux.`,
       brightnessIdealText: (name, lux) =>
         `${name}: ideal zone 300–500 lux (${lux} lux).`,
+<<<<<<< HEAD
+      noiseAlertTitle: 'High Noise Level',
+      noiseAlertText: (name, level) =>
+        `${name}: high noise level detected (${level}/100 — Loud). Identify and reduce the noise source.`,
+      noiseMediumTitle: 'Moderate Noise',
+      noiseMediumText: (name, level) =>
+        `${name}: moderate noise level (${level}/100). Consider reducing distractions.`,
+      noiseCalmTitle: 'Quiet Environment',
+      noiseCalmText: (name, level) =>
+        `${name}: calm environment (noise level: ${level}/100).`,
+=======
+>>>>>>> de425048a4433d79704cfc35b86f357f42007b07
       sensorDataTitle: 'Sensor data',
       sensorDataText: (name) =>
         `${name}: Latest record has no numeric values for the assistant yet (e.g. light-only history).`,
@@ -468,13 +517,19 @@ export const translations: Record<Lang, Translations> = {
       noDataYet: 'No data yet',
       sensorTemp: 'Temperature',
       sensorHumidity: 'Humidity',
+<<<<<<< HEAD
+=======
       sensorCo2: 'CO₂',
+>>>>>>> de425048a4433d79704cfc35b86f357f42007b07
       sensorNoise: 'Noise',
       sensorLight: 'Light',
       available: (n) => `${n} available`,
       occupied: (n) => `${n} occupied`,
       temperatureTrend: 'Temperature trend',
+<<<<<<< HEAD
+=======
       co2Trend: 'CO₂ level trend',
+>>>>>>> de425048a4433d79704cfc35b86f357f42007b07
       lightTrend: 'Light intensity trend',
       noiseTrend: 'Noise level trend',
       chartSubtitle: 'Last 24 hours · all rooms · hourly avg',
@@ -529,7 +584,10 @@ export const translations: Record<Lang, Translations> = {
       deleteAriaLabel: (name) => `Delete room ${name}`,
       sensorTemp: 'Temp',
       sensorHumidity: 'Humidity',
+<<<<<<< HEAD
+=======
       sensorCo2: 'CO₂',
+>>>>>>> de425048a4433d79704cfc35b86f357f42007b07
       sensorNoise: 'Noise',
       sensorLight: 'Light',
       sensorPm25: 'PM2.5',
@@ -626,14 +684,21 @@ export const translations: Record<Lang, Translations> = {
       "Ajustement de la qualité de l'air et de la température pour un confort optimal",
     temperature: 'Température',
     humidity: 'Humidité',
+<<<<<<< HEAD
+    noise: 'Niveau sonore',
+=======
     co2: 'CO₂ (ppm)',
     noise: 'Bruit (dB)',
+>>>>>>> de425048a4433d79704cfc35b86f357f42007b07
     light: 'Lumière (lux)',
     lightSliderLabel: (min, max) => `Cible ${min}–${max} lux (cette salle)`,
     lightSaveError: 'Enregistrement impossible. Réessayez.',
     loadingMeasurements: 'Chargement des mesures…',
     temperatureChart: 'Température (24h)',
+<<<<<<< HEAD
+=======
     co2Chart: 'Niveau CO₂ (24h)',
+>>>>>>> de425048a4433d79704cfc35b86f357f42007b07
     noiseChart: 'Niveau sonore (24h)',
     lightChart: 'Intensité lumineuse (24h)',
     pm25Chart: 'PM2.5 (24h)',
@@ -653,12 +718,15 @@ export const translations: Record<Lang, Translations> = {
       noMeasurementsTitle: 'Pas de mesures',
       noMeasurementsText: (name) =>
         `${name} : les graphiques et indicateurs utilisent le dernier point enregistré. Ajoutez des mesures depuis les mises à jour de salle ou la capture admin.`,
+<<<<<<< HEAD
+=======
       airQualityAlertTitle: "Alerte qualité de l'air",
       airQualityAlertText: (name, co2, threshold) =>
         `${name} : CO₂ à ${co2} ppm (au-dessus de ~${threshold} ppm). Augmentation de la ventilation pour maintenir focus et confort.`,
       airQualityStableTitle: "Qualité de l'air stable",
       airQualityStableText: (name, co2) =>
         `${name} : CO₂ sous contrôle (${co2} ppm). La ventilation reste en mode efficace.`,
+>>>>>>> de425048a4433d79704cfc35b86f357f42007b07
       pm25Title: 'Particules PM2.5',
       pm25PollutedText: (name, pm, threshold) =>
         `${name} : air pollué (PM2.5 ~${pm} µg/m³, seuil > ${threshold}). Ventilation ou filtration (SDS011).`,
@@ -689,6 +757,18 @@ export const translations: Record<Lang, Translations> = {
         `${name} : ${lux} lux — en dessous de la zone idéale 300–500 lux.`,
       brightnessIdealText: (name, lux) =>
         `${name} : zone idéale 300–500 lux (${lux} lux).`,
+<<<<<<< HEAD
+      noiseAlertTitle: 'Niveau sonore élevé',
+      noiseAlertText: (name, level) =>
+        `${name} : niveau sonore élevé détecté (${level}/100 — Fort). Identifier et réduire la source de bruit.`,
+      noiseMediumTitle: 'Bruit modéré',
+      noiseMediumText: (name, level) =>
+        `${name} : niveau sonore à ${level}/100 (Moyen). Envisager de réduire les sources de distraction.`,
+      noiseCalmTitle: 'Environnement calme',
+      noiseCalmText: (name, level) =>
+        `${name} : environnement calme (niveau sonore : ${level}/100).`,
+=======
+>>>>>>> de425048a4433d79704cfc35b86f357f42007b07
       sensorDataTitle: 'Données capteurs',
       sensorDataText: (name) =>
         `${name} : le dernier enregistrement n'a pas encore de valeurs numériques pour l'assistant (ex. historique lumière uniquement).`,
@@ -751,13 +831,19 @@ export const translations: Record<Lang, Translations> = {
       noDataYet: 'Aucune donnée',
       sensorTemp: 'Température',
       sensorHumidity: 'Humidité',
+<<<<<<< HEAD
+=======
       sensorCo2: 'CO₂',
+>>>>>>> de425048a4433d79704cfc35b86f357f42007b07
       sensorNoise: 'Bruit',
       sensorLight: 'Lumière',
       available: (n) => `${n} disponible${n !== 1 ? 's' : ''}`,
       occupied: (n) => `${n} occupée${n !== 1 ? 's' : ''}`,
       temperatureTrend: 'Tendance température',
+<<<<<<< HEAD
+=======
       co2Trend: 'Tendance CO₂',
+>>>>>>> de425048a4433d79704cfc35b86f357f42007b07
       lightTrend: 'Tendance intensité lumineuse',
       noiseTrend: 'Tendance bruit',
       chartSubtitle: '24 dernières heures · toutes les salles · moy. horaire',
@@ -812,7 +898,10 @@ export const translations: Record<Lang, Translations> = {
       deleteAriaLabel: (name) => `Supprimer la salle ${name}`,
       sensorTemp: 'Temp',
       sensorHumidity: 'Humidité',
+<<<<<<< HEAD
+=======
       sensorCo2: 'CO₂',
+>>>>>>> de425048a4433d79704cfc35b86f357f42007b07
       sensorNoise: 'Bruit',
       sensorLight: 'Lumière',
       sensorPm25: 'PM2.5',
