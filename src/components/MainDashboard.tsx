@@ -1,8 +1,4 @@
-<<<<<<< HEAD
 import { Thermometer, Volume2, Sun, Star, Brain, Droplets, AlertTriangle, X } from 'lucide-react';
-=======
-import { Thermometer, Wind, Volume2, Sun, Star, Brain, Droplets, AlertTriangle, X } from 'lucide-react';
->>>>>>> de425048a4433d79704cfc35b86f357f42007b07
 import { LineChart, Line, AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { PageType } from '../App';
@@ -89,19 +85,6 @@ export default function MainDashboard({ onNavigate }: MainDashboardProps) {
       format: (v: number) => `${Math.round(v)}%`,
     },
     {
-<<<<<<< HEAD
-=======
-      key: 'co2' as const,
-      label: t.dashboard.sensorCo2,
-      unit: 'ppm',
-      icon: Wind,
-      iconBg: '#eff6ff',
-      iconColor: '#3b82f6',
-      iconBorder: '#bfdbfe',
-      format: (v: number) => `${Math.round(v)} ppm`,
-    },
-    {
->>>>>>> de425048a4433d79704cfc35b86f357f42007b07
       key: 'noise' as const,
       label: t.dashboard.sensorNoise,
       unit: 'dB',
@@ -202,24 +185,13 @@ export default function MainDashboard({ onNavigate }: MainDashboardProps) {
   const dashStatus = useMemo(() => ({
     temperature: summary.temperature != null ? statusTemperature(summary.temperature) : null,
     humidity: summary.humidity != null ? statusHumidityPct(summary.humidity) : null,
-<<<<<<< HEAD
     noise: summary.noise != null ? statusNoiseDb(summary.noise) : null,
     light: summary.light != null ? statusLux(summary.light) : null,
   }), [summary.temperature, summary.humidity, summary.noise, summary.light]);
-=======
-    co2: summary.co2 != null ? statusHigherIsWorse(summary.co2, 500, 800) : null,
-    noise: summary.noise != null ? statusNoiseDb(summary.noise) : null,
-    light: summary.light != null ? statusLux(summary.light) : null,
-  }), [summary.temperature, summary.humidity, summary.co2, summary.noise, summary.light]);
->>>>>>> de425048a4433d79704cfc35b86f357f42007b07
 
   const sensorValues: Record<string, number | null> = {
     temperature: summary.temperature,
     humidity: summary.humidity,
-<<<<<<< HEAD
-=======
-    co2: summary.co2,
->>>>>>> de425048a4433d79704cfc35b86f357f42007b07
     noise: summary.noise,
     light: summary.light,
   };
@@ -227,10 +199,6 @@ export default function MainDashboard({ onNavigate }: MainDashboardProps) {
   const sensorStatuses: Record<string, ReturnType<typeof statusTemperature> | null> = {
     temperature: dashStatus.temperature,
     humidity: dashStatus.humidity,
-<<<<<<< HEAD
-=======
-    co2: dashStatus.co2,
->>>>>>> de425048a4433d79704cfc35b86f357f42007b07
     noise: dashStatus.noise,
     light: dashStatus.light,
   };
@@ -405,49 +373,6 @@ export default function MainDashboard({ onNavigate }: MainDashboardProps) {
           )}
         </div>
 
-<<<<<<< HEAD
-        {/* Light */}
-=======
-        {/* CO2 */}
->>>>>>> de425048a4433d79704cfc35b86f357f42007b07
-        <div
-          className="rounded-2xl p-6 chart-card"
-          style={{ background: 'var(--card)', border: '1px solid var(--gray-200)', padding: '1.75rem' }}
-        >
-          <div className="mb-6">
-            <h3 className="text-base font-semibold" style={{ color: 'var(--gray-900)' }}>
-<<<<<<< HEAD
-=======
-              {t.dashboard.co2Trend}
-            </h3>
-            <p className="text-xs mt-0.5" style={{ color: 'var(--gray-500)' }}>
-              {t.dashboard.chartSubtitle}
-            </p>
-          </div>
-          {summary.co2Data.length > 0 ? (
-            <ResponsiveContainer width="100%" height={220}>
-              <LineChart data={summary.co2Data}>
-                <CartesianGrid strokeDasharray="3 3" stroke="var(--gray-100)" />
-                <XAxis dataKey="time" stroke="var(--gray-300)" fontSize={11} tickLine={false} />
-                <YAxis stroke="var(--gray-300)" fontSize={11} tickLine={false} axisLine={false} domain={['auto', 'auto']} />
-                <Tooltip
-                  contentStyle={{
-                    background: 'var(--card)',
-                    border: '1px solid var(--gray-200)',
-                    borderRadius: 10,
-                    boxShadow: 'var(--shadow-md)',
-                    fontSize: 12,
-                    color: 'var(--gray-900)',
-                  }}
-                />
-                <Line type="monotone" dataKey="value" stroke="#3b82f6" strokeWidth={2} dot={false} />
-              </LineChart>
-            </ResponsiveContainer>
-          ) : (
-            <EmptyChartArea label={t.dashboard.noDataYet} />
-          )}
-        </div>
-
         {/* Light */}
         <div
           className="rounded-2xl p-6 chart-card"
@@ -455,7 +380,6 @@ export default function MainDashboard({ onNavigate }: MainDashboardProps) {
         >
           <div className="mb-6">
             <h3 className="text-base font-semibold" style={{ color: 'var(--gray-900)' }}>
->>>>>>> de425048a4433d79704cfc35b86f357f42007b07
               {t.dashboard.lightTrend}
             </h3>
             <p className="text-xs mt-0.5" style={{ color: 'var(--gray-500)' }}>

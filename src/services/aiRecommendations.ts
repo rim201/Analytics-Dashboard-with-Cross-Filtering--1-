@@ -137,10 +137,6 @@ type SensorInput = {
   name: string;
   temperature: number | null;
   humidity: number | null;
-<<<<<<< HEAD
-=======
-  co2: number | null;
->>>>>>> de425048a4433d79704cfc35b86f357f42007b07
   noise: number | null;
   pm25: number | null;
 };
@@ -153,29 +149,6 @@ export function buildSensorAlertCandidates(rooms: SensorInput[]): SensorAlertCan
   const candidates: SensorAlertCandidate[] = [];
 
   for (const r of rooms) {
-<<<<<<< HEAD
-=======
-    if (r.co2 != null) {
-      if (r.co2 > 1500) {
-        candidates.push({
-          roomId: r.id, roomName: r.name, type: 'critical',
-          key: `${r.id}-co2-critical`,
-          title: `CO₂ critique — ${r.name}`,
-          message: `CO₂ à ${Math.round(r.co2)} ppm (seuil critique 1500 ppm). Ventilation immédiate requise.`,
-          category: "Qualité de l'air",
-        });
-      } else if (r.co2 > 1000) {
-        candidates.push({
-          roomId: r.id, roomName: r.name, type: 'warning',
-          key: `${r.id}-co2-warning`,
-          title: `CO₂ élevé — ${r.name}`,
-          message: `CO₂ à ${Math.round(r.co2)} ppm (recommandé < 1000 ppm). Améliorer la ventilation.`,
-          category: "Qualité de l'air",
-        });
-      }
-    }
-
->>>>>>> de425048a4433d79704cfc35b86f357f42007b07
     if (r.temperature != null) {
       if (r.temperature > 30 || r.temperature < 15) {
         candidates.push({

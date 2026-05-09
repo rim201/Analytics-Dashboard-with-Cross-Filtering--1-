@@ -48,7 +48,6 @@ export function buildAgentConfigJson(
 
   return `${JSON.stringify(
     {
-<<<<<<< HEAD
       firebase: {
         project_id: firebaseClientConfig.projectId,
       },
@@ -73,39 +72,6 @@ export function buildAgentConfigJson(
         medium_threshold: 35,
         loud_threshold: 65,
         cooldown_minutes: 30,
-=======
-      firebaseClient: firebaseClientConfig,
-      deviceDocId: params.deviceDocId,
-      roomId: params.roomId,
-      intervalSeconds,
-      sensors: SENSOR_DOC,
-      hardware: {
-        dht22Gpio: 4,
-        pirGpio: 23,
-        pirGpioChip: null,
-        pirPullUp: false,
-        pirActiveLow: false,
-        pirSampleMs: 700,
-        pirMotionMinFrac: 0.72,
-        pirVacancyMinutes: 2,
-        /** Anti-sensibilité : min. secondes entre deux prises en compte du « dernier mouvement » (rafraîchissement vacance) si la ligne reste à 1. */
-        pirMotionCooldownSeconds: 5,
-        /** Intervalle entre deux lectures is_active (ex. 0.5 s, style tuto gpiozero). */
-        pirOccupancyPollSeconds: 0.5,
-        /** true : lire le PIR avec gpiozero (DigitalInputDevice) en premier, comme les exemples Raspberry ; false : RPi.GPIO en premier. */
-        pirPreferGpiozero: true,
-        syncRoomOccupancyFromPir: true,
-        bh1750I2cBus: 1,
-        bh1750I2cAddr: 35,
-        sds011SerialDevice: '/dev/ttyUSB0',
-        co2SerialDevice: '/dev/serial0',
-        mcp3008SpiBus: 0,
-        mcp3008SpiDevice: 0,
-        max9814McpChannel: 0,
-        max9814SampleCount: 400,
-        max9814NoiseGain: 0.09,
-        max9814NoiseFloorDb: 34,
->>>>>>> de425048a4433d79704cfc35b86f357f42007b07
       },
     },
     null,
@@ -470,29 +436,9 @@ def update_device_heartbeat(db, device_id: str):
     if not device_id:
         return
     try:
-<<<<<<< HEAD
         db.collection("devices").document(device_id).update({
             "lastUpdate": firestore.SERVER_TIMESTAMP,
         })
-=======
-        db.collection("rooms").document(rid).set(
-            {
-                "occupancy": int(new_occ),
-                "lastUpdate": firestore.SERVER_TIMESTAMP,
-                **({"lastMotionAt": firestore.SERVER_TIMESTAMP} if new_occ == 1 else {}),
-            },
-            merge=True,
-        )
-        _PUBLISHED_PIR_OCCUPANCY = new_occ
-        if rising_motion:
-            tag = " (mouvement -> occupe tout de suite)"
-        elif new_occ == 1:
-            tag = " (occupe vacance " + str(vac_min) + " min sans nouveau mouvement)"
-        else:
-            tag = " (libre: aucun mouvement depuis " + str(vac_min) + " min)"
-        msg = "syncRoomOccupancyFromPir: room_id=" + rid + " occupancy -> " + str(int(new_occ)) + tag
-        print(msg, flush=True)
->>>>>>> de425048a4433d79704cfc35b86f357f42007b07
     except Exception as e:
         log.warning(f"Heartbeat device impossible: {e}")
 

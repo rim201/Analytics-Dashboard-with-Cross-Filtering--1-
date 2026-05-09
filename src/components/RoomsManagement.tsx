@@ -614,21 +614,6 @@ export default function RoomsManagement({ onRoomSelect, isAdmin = false }: Rooms
                       {room.humidity != null ? `${Math.round(room.humidity)}%` : '--'}
                     </p>
                     {comfortPill(room.humidity, statusHumidityPct, lang)}
-<<<<<<< HEAD
-=======
-                  </div>
-                </div>
-                <div className="flex items-center space-x-2">
-                  <div className="w-8 h-8 bg-blue-100 rounded-lg flex items-center justify-center">
-                    <Wind className="w-4 h-4 text-blue-600" />
-                  </div>
-                  <div>
-                    <p className="text-xs text-gray-500">{t.rooms.sensorCo2}</p>
-                    <p className="text-sm font-medium text-gray-900 tabular-nums">
-                      {room.co2 != null ? `${Math.round(room.co2)} ppm` : '--'}
-                    </p>
-                    {comfortPill(room.co2, (v) => statusHigherIsWorse(v, 500, 800), lang)}
->>>>>>> de425048a4433d79704cfc35b86f357f42007b07
                   </div>
                 </div>
                 <div className="flex items-center space-x-2">

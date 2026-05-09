@@ -1025,7 +1025,6 @@ export default function AdminSettings() {
               </li>
             </ol>
           </div>
-<<<<<<< HEAD
           <div className="p-6 border-b border-gray-100">
             <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
               <h3 className="font-semibold text-gray-900 mt-1">{t.settings.tabDevices}</h3>
@@ -1082,31 +1081,6 @@ export default function AdminSettings() {
                   </button>
                 </div>
               </div>
-=======
-          <div className="p-6 border-b border-gray-100 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-            <h3 className="font-semibold text-gray-900">{t.settings.tabDevices}</h3>
-            <div className="flex items-center gap-2">
-              <label htmlFor="deploy-interval-min" className="text-xs text-gray-600 whitespace-nowrap">
-                Intervalle auto (min)
-              </label>
-              <input
-                id="deploy-interval-min"
-                type="number"
-                min={1}
-                max={1440}
-                value={deployIntervalMinutes}
-                onChange={(e) => setDeployIntervalMinutes(e.target.value)}
-                className="w-20 rounded-lg border border-gray-300 px-2 py-1 text-sm outline-none focus:ring-2 focus:ring-emerald-500"
-                title="Intégré dans le script téléchargé (agent_config.json > intervalSeconds)."
-              />
-              <button
-                type="button"
-                onClick={openAddDeviceModal}
-                className="px-4 py-2 bg-emerald-500 text-white rounded-xl font-medium hover:bg-emerald-600 transition"
-              >
-                {t.settings.addDevice}
-              </button>
->>>>>>> de425048a4433d79704cfc35b86f357f42007b07
             </div>
           </div>
           {deviceModalOpen && (

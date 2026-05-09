@@ -801,11 +801,7 @@ export async function updateRoomLight(roomId: string, lightLux: number): Promise
   });
 }
 
-<<<<<<< HEAD
 /** Un point d'historique capteurs : date (`timestamp`) + valeurs (température, humidité, bruit, lumière). */
-=======
-/** Un point d'historique capteurs : date (`timestamp`) + valeurs (température, humidité, CO₂, bruit, lumière). */
->>>>>>> de425048a4433d79704cfc35b86f357f42007b07
 export async function appendRoomMeasurementSnapshot(
   roomId: string,
   values: {
@@ -1494,7 +1490,6 @@ export function subscribeDeviceLastUpdate(
   );
 }
 
-<<<<<<< HEAD
 /** Souscription temps réel au lastUpdate du device lié à une salle. */
 export function subscribeDeviceLastUpdateForRoom(
   roomId: string,
@@ -1517,8 +1512,6 @@ export function subscribeDeviceLastUpdateForRoom(
   );
 }
 
-=======
->>>>>>> de425048a4433d79704cfc35b86f357f42007b07
 // —— Measurements —— //
 
 export async function listMeasurements(roomId: string): Promise<MeasurementRow[]> {

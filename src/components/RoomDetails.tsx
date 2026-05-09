@@ -8,10 +8,6 @@ import {
   Brain,
   Factory,
   Eye,
-<<<<<<< HEAD
-=======
-  EyeOff,
->>>>>>> de425048a4433d79704cfc35b86f357f42007b07
 } from 'lucide-react';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
 import '../styles/custom.css';
@@ -69,10 +65,6 @@ export default function RoomDetails({ roomId, onBack, isAdmin = false }: RoomDet
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [aiAggressiveness, setAiAggressiveness] = useState(7);
-<<<<<<< HEAD
-=======
-  const [showLightControl, setShowLightControl] = useState(false);
->>>>>>> de425048a4433d79704cfc35b86f357f42007b07
   const numericRoomId = roomId?.replace(/^room-/, '') ?? '';
   const lastNoiseAlertRef = useRef<number>(0);
   const lastOfflineAlertRef = useRef<number>(0);
@@ -132,10 +124,7 @@ export default function RoomDetails({ roomId, onBack, isAdmin = false }: RoomDet
     return unsub;
   }, [numericRoomId]);
 
-<<<<<<< HEAD
 
-=======
->>>>>>> de425048a4433d79704cfc35b86f357f42007b07
   const latest = useMemo(() => {
     if (measurements.length === 0) return null;
     return measurements.reduce((best, m) => {
@@ -212,14 +201,6 @@ export default function RoomDetails({ roomId, onBack, isAdmin = false }: RoomDet
     return `${d.getDate().toString().padStart(2,'0')}/${(d.getMonth()+1).toString().padStart(2,'0')} ${time}`;
   }
 
-  function formatTimeSince(iso: string): string {
-    const diffMs = Date.now() - new Date(iso).getTime();
-    const diffMin = Math.floor(diffMs / 60_000);
-    if (diffMin < 1) return t.motionJustNow;
-    if (diffMin < 60) return t.motionMinutesAgo(diffMin);
-    return t.motionHoursAgo(Math.floor(diffMin / 60));
-  }
-
   const roomMeta = useMemo(
     () => ({
       name: roomInfo?.name || 'Room',
@@ -242,32 +223,6 @@ export default function RoomDetails({ roomId, onBack, isAdmin = false }: RoomDet
     [latest],
   );
 
-<<<<<<< HEAD
-=======
-  const clampLux = useCallback((v: number) => Math.min(LUX_MAX, Math.max(LUX_MIN, Math.round(v))), []);
-
-  const sliderLightLux =
-    latest?.light != null && Number.isFinite(latest.light) ? clampLux(latest.light) : LUX_MIN;
-
-  const commitLightFromSlider = useCallback(
-    async (el: HTMLInputElement) => {
-      if (!numericRoomId || !isAdmin) return;
-      const v = Number(el.value);
-      setDragLightLux(null);
-      setLightError(null);
-      setLightSaving(true);
-      try {
-        await updateRoomLight(numericRoomId, v);
-      } catch {
-        setLightError(translations[lang].lightSaveError);
-      } finally {
-        setLightSaving(false);
-      }
-    },
-    [numericRoomId, isAdmin, lang],
-  );
-
->>>>>>> de425048a4433d79704cfc35b86f357f42007b07
   const aiInsights = useMemo(() => {
     const ai = translations[lang].ai;
     const thr = thresholdsForAggressiveness(aiAggressiveness);
@@ -284,25 +239,7 @@ export default function RoomDetails({ roomId, onBack, isAdmin = false }: RoomDet
       ];
     }
 
-<<<<<<< HEAD
     if (latest.pm25 != null) {
-=======
-    if (latest.co2 != null) {
-      if (latest.co2 > thr.co2High) {
-        messages.push({
-          title: ai.airQualityAlertTitle,
-          text: ai.airQualityAlertText(name, Math.round(latest.co2), Math.round(thr.co2High)),
-          tone: 'blue',
-        });
-      } else {
-        messages.push({
-          title: ai.airQualityStableTitle,
-          text: ai.airQualityStableText(name, Math.round(latest.co2)),
-          tone: 'blue',
-        });
-      }
-    } else if (latest.pm25 != null) {
->>>>>>> de425048a4433d79704cfc35b86f357f42007b07
       const pm = latest.pm25;
       if (pm > PM25_POLLUTED_GT) {
         messages.push({
@@ -385,7 +322,6 @@ export default function RoomDetails({ roomId, onBack, isAdmin = false }: RoomDet
         messages.push({
           title: ai.brightnessTitle,
           text: ai.brightnessIdealText(name, Math.round(latest.light)),
-<<<<<<< HEAD
           tone: 'green',
         });
       }
@@ -408,8 +344,6 @@ export default function RoomDetails({ roomId, onBack, isAdmin = false }: RoomDet
         messages.push({
           title: ai.noiseCalmTitle,
           text: ai.noiseCalmText(name, Math.round(latest.noise)),
-=======
->>>>>>> de425048a4433d79704cfc35b86f357f42007b07
           tone: 'green',
         });
       }
@@ -441,11 +375,7 @@ export default function RoomDetails({ roomId, onBack, isAdmin = false }: RoomDet
   return (
     <div className="space-y-6">
       {/* Back Button and Header */}
-<<<<<<< HEAD
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
-=======
-      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
->>>>>>> de425048a4433d79704cfc35b86f357f42007b07
         <div className="flex items-center space-x-4 min-w-0">
           <button
             onClick={onBack}
@@ -455,11 +385,7 @@ export default function RoomDetails({ roomId, onBack, isAdmin = false }: RoomDet
           </button>
           <div className="flex-1 min-w-0">
             <h2 className="text-xl sm:text-2xl font-bold text-gray-900 truncate">{roomMeta.name}</h2>
-<<<<<<< HEAD
             <div className="flex flex-wrap items-center gap-3 mt-2">
-=======
-            <div className="flex flex-wrap items-center gap-2 mt-1">
->>>>>>> de425048a4433d79704cfc35b86f357f42007b07
               <div className="flex items-center space-x-2">
                 <div className={`w-2 h-2 rounded-full shrink-0 ${roomMeta.status === 'occupied' ? 'bg-blue-500' : 'bg-emerald-500'}`}></div>
                 <span className="text-sm text-gray-600 capitalize">
@@ -472,7 +398,6 @@ export default function RoomDetails({ roomId, onBack, isAdmin = false }: RoomDet
               {roomMeta.lastMotionAt && (
                 <div className="flex items-center gap-1 px-2 py-1 bg-gray-50 text-gray-500 rounded-full text-xs border border-gray-200">
                   <Eye className="w-3 h-3 shrink-0" />
-<<<<<<< HEAD
                   <span>{t.lastMotion} : {formatLastSync(new Date(roomMeta.lastMotionAt).getTime())}</span>
                 </div>
               )}
@@ -491,11 +416,6 @@ export default function RoomDetails({ roomId, onBack, isAdmin = false }: RoomDet
                   </div>
                 );
               })()}
-=======
-                  <span>{t.lastMotion} : {formatTimeSince(roomMeta.lastMotionAt)}</span>
-                </div>
-              )}
->>>>>>> de425048a4433d79704cfc35b86f357f42007b07
             </div>
           </div>
         </div>
@@ -555,29 +475,6 @@ export default function RoomDetails({ roomId, onBack, isAdmin = false }: RoomDet
             {latest?.humidity != null ? `${Math.round(latest.humidity)}%` : '--'}
           </div>
           <div className="text-sm text-gray-500">{t.humidity}</div>
-<<<<<<< HEAD
-=======
-        </div>
-
-        {/* CO2 */}
-        <div className="bg-white rounded-2xl p-6 shadow-lg border border-gray-100">
-          <div className="flex items-center justify-between mb-4">
-            <div className="w-12 h-12 bg-gradient-to-br from-blue-100 to-blue-200 rounded-xl flex items-center justify-center">
-              <Wind className="w-6 h-6 text-blue-600" />
-            </div>
-            {statusChips?.co2 != null ? (
-              <span className={`px-2 py-1 text-xs font-medium rounded-lg ${comfortChipToneClass(statusChips.co2)}`}>
-                {translateChipLabel(statusChips.co2.label, lang)}
-              </span>
-            ) : (
-              <span className="px-2 py-1 bg-gray-100 text-gray-500 text-xs font-medium rounded-lg">--</span>
-            )}
-          </div>
-          <div className="text-3xl font-bold text-gray-900 mb-1 tabular-nums">
-            {latest?.co2 != null ? Math.round(latest.co2) : '--'}
-          </div>
-          <div className="text-sm text-gray-500">{t.co2}</div>
->>>>>>> de425048a4433d79704cfc35b86f357f42007b07
         </div>
 
         {/* Noise */}
@@ -597,11 +494,7 @@ export default function RoomDetails({ roomId, onBack, isAdmin = false }: RoomDet
           <div className="text-3xl font-bold text-gray-900 mb-1 tabular-nums">
             {latest?.noise != null ? `${Math.round(latest.noise)} / 100` : '--'}
           </div>
-<<<<<<< HEAD
           <div className="text-sm text-gray-500">{t.noise} · INMP441</div>
-=======
-          <div className="text-sm text-gray-500">{t.noise}</div>
->>>>>>> de425048a4433d79704cfc35b86f357f42007b07
         </div>
 
         {/* Light */}
@@ -621,55 +514,7 @@ export default function RoomDetails({ roomId, onBack, isAdmin = false }: RoomDet
           <div className="text-3xl font-bold text-gray-900 mb-1 tabular-nums">
             {formatLightValue(latest?.light)}
           </div>
-<<<<<<< HEAD
           <div className="text-sm text-gray-500">{t.light}</div>
-=======
-          <div className="flex items-center justify-between">
-            <div className="text-sm text-gray-500">{t.light}</div>
-            {isAdmin && numericRoomId ? (
-              <button
-                onClick={() => setShowLightControl((v) => !v)}
-                className="flex items-center gap-1 text-xs text-amber-600 hover:text-amber-700 transition"
-                aria-expanded={showLightControl}
-              >
-                {showLightControl
-                  ? <><EyeOff className="w-3 h-3" /> {t.hideLightControl}</>
-                  : <><Eye className="w-3 h-3" /> {t.showLightControl}</>
-                }
-              </button>
-            ) : null}
-          </div>
-          {isAdmin && numericRoomId && showLightControl ? (
-            <div className="mt-4 pt-4 border-t border-gray-100">
-              <label htmlFor="room-light-lux" className="block text-xs font-medium text-gray-500 mb-2">
-                {t.lightSliderLabel(LUX_MIN, LUX_MAX)}
-              </label>
-              <input
-                id="room-light-lux"
-                type="range"
-                min={LUX_MIN}
-                max={LUX_MAX}
-                step={LUX_STEP}
-                value={dragLightLux !== null ? dragLightLux : sliderLightLux}
-                disabled={lightSaving}
-                onChange={(e) => setDragLightLux(Number(e.target.value))}
-                onPointerUp={(e) => void commitLightFromSlider(e.currentTarget)}
-                onPointerCancel={() => setDragLightLux(null)}
-                onBlur={(e) => void commitLightFromSlider(e.currentTarget)}
-                className="mt-1 h-2 w-full cursor-pointer accent-amber-600 disabled:opacity-50"
-              />
-              <div className="mt-1 flex justify-between text-[10px] text-gray-400">
-                <span>{LUX_MIN}</span>
-                <span>{LUX_MAX}</span>
-              </div>
-              {lightError && (
-                <p className="mt-2 text-xs text-red-600" role="alert">
-                  {lightError}
-                </p>
-              )}
-            </div>
-          ) : null}
->>>>>>> de425048a4433d79704cfc35b86f357f42007b07
         </div>
       </div>
 
@@ -726,11 +571,7 @@ export default function RoomDetails({ roomId, onBack, isAdmin = false }: RoomDet
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         <div className="bg-white rounded-2xl p-6 shadow-lg border border-gray-100">
           <h3 className="font-semibold text-gray-900 mb-4">{t.temperatureChart}</h3>
-<<<<<<< HEAD
           {hasTemperatureData ? (
-=======
-          {hasChartData ? (
->>>>>>> de425048a4433d79704cfc35b86f357f42007b07
             <ResponsiveContainer width="100%" height={200}>
               <LineChart data={chartData}>
                 <CartesianGrid strokeDasharray="3 3" stroke="#f3f4f6" />
@@ -746,13 +587,8 @@ export default function RoomDetails({ roomId, onBack, isAdmin = false }: RoomDet
         </div>
 
         <div className="bg-white rounded-2xl p-6 shadow-lg border border-gray-100">
-<<<<<<< HEAD
           <h3 className="font-semibold text-gray-900 mb-4">{t.noiseChart}</h3>
           {hasNoiseData ? (
-=======
-          <h3 className="font-semibold text-gray-900 mb-4">{t.co2Chart}</h3>
-          {hasChartData ? (
->>>>>>> de425048a4433d79704cfc35b86f357f42007b07
             <ResponsiveContainer width="100%" height={200}>
               <LineChart data={chartData}>
                 <CartesianGrid strokeDasharray="3 3" stroke="#f3f4f6" />
@@ -768,13 +604,8 @@ export default function RoomDetails({ roomId, onBack, isAdmin = false }: RoomDet
         </div>
 
         <div className="bg-white rounded-2xl p-6 shadow-lg border border-gray-100">
-<<<<<<< HEAD
           <h3 className="font-semibold text-gray-900 mb-4">{t.lightChart}</h3>
           {hasLightData ? (
-=======
-          <h3 className="font-semibold text-gray-900 mb-4">{t.noiseChart}</h3>
-          {hasChartData ? (
->>>>>>> de425048a4433d79704cfc35b86f357f42007b07
             <ResponsiveContainer width="100%" height={200}>
               <LineChart data={chartData}>
                 <CartesianGrid strokeDasharray="3 3" stroke="#f3f4f6" />
@@ -802,41 +633,15 @@ export default function RoomDetails({ roomId, onBack, isAdmin = false }: RoomDet
         </div>
 
         <div className="bg-white rounded-2xl p-6 shadow-lg border border-gray-100">
-<<<<<<< HEAD
           <h3 className="font-semibold text-gray-900 mb-4">{t.pm25Chart}</h3>
           {hasPm25Data ? (
-=======
-          <h3 className="font-semibold text-gray-900 mb-4">{t.lightChart}</h3>
-          {hasChartData ? (
->>>>>>> de425048a4433d79704cfc35b86f357f42007b07
             <ResponsiveContainer width="100%" height={200}>
               <LineChart data={chartData}>
                 <CartesianGrid strokeDasharray="3 3" stroke="#f3f4f6" />
                 <XAxis dataKey="time" stroke="#9ca3af" fontSize={12} />
                 <YAxis stroke="#9ca3af" fontSize={12} domain={['auto', 'auto']} />
                 <Tooltip />
-<<<<<<< HEAD
                 <Line connectNulls type="monotone" dataKey="pm25" stroke="#64748b" strokeWidth={2} dot={false} />
-=======
-                <Line type="monotone" dataKey="light" stroke="#f59e0b" strokeWidth={2} dot={false} />
-              </LineChart>
-            </ResponsiveContainer>
-          ) : (
-            <div className="flex h-[200px] items-center justify-center text-sm text-gray-400">--</div>
-          )}
-        </div>
-
-        <div className="bg-white rounded-2xl p-6 shadow-lg border border-gray-100">
-          <h3 className="font-semibold text-gray-900 mb-4">{t.pm25Chart}</h3>
-          {hasChartData ? (
-            <ResponsiveContainer width="100%" height={200}>
-              <LineChart data={chartData}>
-                <CartesianGrid strokeDasharray="3 3" stroke="#f3f4f6" />
-                <XAxis dataKey="time" stroke="#9ca3af" fontSize={12} />
-                <YAxis stroke="#9ca3af" fontSize={12} domain={['auto', 'auto']} />
-                <Tooltip />
-                <Line type="monotone" dataKey="pm25" stroke="#64748b" strokeWidth={2} dot={false} />
->>>>>>> de425048a4433d79704cfc35b86f357f42007b07
               </LineChart>
             </ResponsiveContainer>
           ) : (
